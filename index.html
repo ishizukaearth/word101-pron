@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>English Pronunciation Trainer</title>
+    <style>
+:root {
+  color-scheme: light;
+  --ink: #172026;
+  --muted: #66727c;
+  --line: #d7dde2;
+  --panel: #ffffff;
+  --page: #f4f7f8;
+  --accent: #157f7f;
+  --accent-strong: #0d5f64;
+  --warn: #bd5a2a;
+  --good: #23845f;
+  --shadow: 0 18px 45px rgba(23, 32, 38, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  width: min(100%, 980px);
+  margin: 0 auto;
+  padding: 18px;
+}
+
+.top-bar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0 18px;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2 {
+  margin: 0;
+}
+
+h1 {
+  font-size: 2rem;
+}
+
+h2 {
+  font-size: 1rem;
+}
+
+.progress-card {
+  min-width: 145px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.progress-card span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+.practice-panel,
+.wave-panel,
+.tools-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.practice-panel {
+  padding: 22px;
+}
+
+.word-area {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 14px;
+}
+
+.word-number {
+  min-width: 58px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+  font-weight: 700;
+}
+
+.word {
+  overflow-wrap: anywhere;
+  font-size: clamp(2.5rem, 14vw, 5.4rem);
+  line-height: 0.95;
+  font-weight: 800;
+}
+
+.meaning {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 1.1rem;
+}
+
+.focus-row {
+  display: flex;
+  gap: 8px;
+  margin: 20px 0;
+}
+
+.focus-chip {
+  display: inline-flex;
+  min-width: 56px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.focus-chip.active {
+  border-color: var(--accent);
+  background: #e4f5f3;
+  color: var(--accent-strong);
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: 44px 1fr 1.1fr 1fr 44px;
+  gap: 10px;
+}
+
+button {
+  min-height: 46px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.icon-button {
+  background: #e7ecef;
+  color: var(--ink);
+  font-size: 1.25rem;
+}
+
+.main-button {
+  background: var(--accent);
+  color: #fff;
+}
+
+.record-button {
+  background: var(--warn);
+  color: #fff;
+}
+
+.record-button.recording {
+  background: #9f2f2f;
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.score-tile {
+  min-height: 76px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.label,
+.wave-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.score-tile strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.7rem;
+}
+
+.wave-panel,
+.tools-panel {
+  margin-top: 14px;
+  padding: 18px;
+}
+
+.wave-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+#recordingStatus {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.wave-stack {
+  display: grid;
+  gap: 12px;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 128px;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+details + details {
+  margin-top: 10px;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.import-grid,
+.recognition-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.file-box {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+textarea {
+  min-height: 130px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+#loadPasteButton,
+#recognitionButton {
+  background: #26343d;
+  color: #fff;
+}
+
+#recognitionResult {
+  margin: 0;
+  color: var(--muted);
+}
+
+@media (max-width: 680px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  .top-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .controls {
+    grid-template-columns: 44px 1fr 1fr 44px;
+  }
+
+  #playMineButton {
+    grid-column: 2 / 4;
+  }
+
+  .score-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+
+    </style>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="top-bar" aria-label="学習状況">
+        <div>
+          <p class="eyebrow">100-word pronunciation practice</p>
+          <h1>発音練習</h1>
+        </div>
+        <div class="progress-card">
+          <span id="progressText">1 / 12</span>
+          <progress id="progressBar" value="1" max="12"></progress>
+        </div>
+      </section>
+
+      <section class="practice-panel">
+        <div class="word-area">
+          <div class="word-number" id="wordNumber">001</div>
+          <div>
+            <div class="word" id="wordText">apple</div>
+            <div class="meaning" id="meaningText">りんご</div>
+          </div>
+        </div>
+
+        <div class="focus-row" aria-label="重点音">
+          <span class="focus-chip" id="aeChip">/ae/</span>
+          <span class="focus-chip" id="thChip">/th/</span>
+          <span class="focus-chip" id="rChip">/r/</span>
+        </div>
+
+        <div class="controls" aria-label="練習操作">
+          <button class="icon-button" id="prevButton" type="button" title="前の単語">←</button>
+          <button class="main-button" id="speakButton" type="button">モデル音声</button>
+          <button class="record-button" id="recordButton" type="button">録音開始</button>
+          <button class="main-button" id="playMineButton" type="button" disabled>自分を再生</button>
+          <button class="icon-button" id="nextButton" type="button" title="次の単語">→</button>
+        </div>
+
+        <div class="score-grid">
+          <div class="score-tile">
+            <span class="label">総合</span>
+            <strong id="overallScore">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">長さ</span>
+            <strong id="durationScore">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">音量</span>
+            <strong id="volumeScore">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">重点音</span>
+            <strong id="focusScore">--</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="wave-panel" aria-label="波形比較">
+        <div class="wave-header">
+          <h2>波形比較</h2>
+          <span id="recordingStatus">録音待機中</span>
+        </div>
+        <div class="wave-stack">
+          <div>
+            <div class="wave-label">モデル目安</div>
+            <canvas id="modelCanvas" width="900" height="180"></canvas>
+          </div>
+          <div>
+            <div class="wave-label">あなたの録音</div>
+            <canvas id="userCanvas" width="900" height="180"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <section class="tools-panel">
+        <details>
+          <summary>単語リストを読み込む</summary>
+          <div class="import-grid">
+            <label class="file-box">
+              <span>JH101_001.txt を選択</span>
+              <input id="fileInput" type="file" accept=".txt,text/plain">
+            </label>
+            <textarea id="wordPaste" placeholder="001#apple#りんご&#10;002#book#本"></textarea>
+            <button id="loadPasteButton" type="button">貼り付け内容を読み込む</button>
+          </div>
+        </details>
+
+        <details>
+          <summary>音声認識レスポンス確認</summary>
+          <div class="recognition-box">
+            <button id="recognitionButton" type="button">ブラウザ音声認識を試す</button>
+            <p id="recognitionResult">未実行</p>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <script>
+const fallbackWordsText = `001#apple#りんご
+002#bag#かばん
+003#thank#感謝する
+004#three#3
+005#think#考える
+006#red#赤い
+007#right#右、正しい
+008#read#読む
+009#cat#猫
+010#that#あれ、それ
+011#river#川
+012#around#周囲に`;
+
+const state = {
+  words: parseWordText(fallbackWordsText),
+  index: 0,
+  mediaRecorder: null,
+  recordingChunks: [],
+  recordedBlob: null,
+  recordedUrl: null,
+  audioContext: null,
+  recordingStartedAt: 0,
+  lastMetrics: null,
+};
+
+const els = {
+  progressText: document.querySelector("#progressText"),
+  progressBar: document.querySelector("#progressBar"),
+  wordNumber: document.querySelector("#wordNumber"),
+  wordText: document.querySelector("#wordText"),
+  meaningText: document.querySelector("#meaningText"),
+  aeChip: document.querySelector("#aeChip"),
+  thChip: document.querySelector("#thChip"),
+  rChip: document.querySelector("#rChip"),
+  prevButton: document.querySelector("#prevButton"),
+  nextButton: document.querySelector("#nextButton"),
+  speakButton: document.querySelector("#speakButton"),
+  recordButton: document.querySelector("#recordButton"),
+  playMineButton: document.querySelector("#playMineButton"),
+  modelCanvas: document.querySelector("#modelCanvas"),
+  userCanvas: document.querySelector("#userCanvas"),
+  recordingStatus: document.querySelector("#recordingStatus"),
+  overallScore: document.querySelector("#overallScore"),
+  durationScore: document.querySelector("#durationScore"),
+  volumeScore: document.querySelector("#volumeScore"),
+  focusScore: document.querySelector("#focusScore"),
+  fileInput: document.querySelector("#fileInput"),
+  wordPaste: document.querySelector("#wordPaste"),
+  loadPasteButton: document.querySelector("#loadPasteButton"),
+  recognitionButton: document.querySelector("#recognitionButton"),
+  recognitionResult: document.querySelector("#recognitionResult"),
+};
+
+render();
+
+els.prevButton.addEventListener("click", () => moveWord(-1));
+els.nextButton.addEventListener("click", () => moveWord(1));
+els.speakButton.addEventListener("click", speakCurrentWord);
+els.recordButton.addEventListener("click", toggleRecording);
+els.playMineButton.addEventListener("click", playRecording);
+els.fileInput.addEventListener("change", loadSelectedFile);
+els.loadPasteButton.addEventListener("click", loadPastedWords);
+els.recognitionButton.addEventListener("click", runRecognitionCheck);
+
+function parseWordText(text) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, lineIndex) => {
+      const parts = line.split("#");
+      return {
+        id: (parts[0] || String(lineIndex + 1)).trim(),
+        spelling: (parts[1] || "").trim(),
+        meaning: parts.slice(2).join("#").trim(),
+      };
+    })
+    .filter((item) => item.spelling);
+}
+
+function render() {
+  const word = currentWord();
+  els.progressText.textContent = `${state.index + 1} / ${state.words.length}`;
+  els.progressBar.max = state.words.length;
+  els.progressBar.value = state.index + 1;
+  els.wordNumber.textContent = word.id;
+  els.wordText.textContent = word.spelling;
+  els.meaningText.textContent = word.meaning || "意味なし";
+  els.prevButton.disabled = state.index === 0;
+  els.nextButton.disabled = state.index === state.words.length - 1;
+  els.playMineButton.disabled = !state.recordedBlob;
+
+  const focus = getFocusSounds(word.spelling);
+  setChip(els.aeChip, focus.ae);
+  setChip(els.thChip, focus.th);
+  setChip(els.rChip, focus.r);
+
+  drawModelWave(word.spelling);
+  if (!state.recordedBlob) {
+    clearCanvas(els.userCanvas, "録音するとここに波形が表示されます");
+    resetScores();
+  }
+}
+
+function currentWord() {
+  return state.words[state.index];
+}
+
+function setChip(element, active) {
+  element.classList.toggle("active", active);
+}
+
+function moveWord(delta) {
+  state.index = Math.min(Math.max(state.index + delta, 0), state.words.length - 1);
+  clearRecording();
+  render();
+}
+
+function speakCurrentWord() {
+  const word = currentWord().spelling;
+  if (!("speechSynthesis" in window)) {
+    setStatus("このブラウザは読み上げに対応していません");
+    return;
+  }
+
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(word);
+  utterance.lang = "en-US";
+  utterance.rate = 0.82;
+  utterance.pitch = 1;
+  utterance.onstart = () => setStatus("モデル音声を再生中");
+  utterance.onend = () => setStatus("録音待機中");
+  window.speechSynthesis.speak(utterance);
+}
+
+async function toggleRecording() {
+  if (state.mediaRecorder?.state === "recording") {
+    state.mediaRecorder.stop();
+    return;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("このブラウザは録音に対応していません");
+    return;
+  }
+
+  try {
+    clearRecording();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = pickMimeType();
+    state.mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    state.recordingChunks = [];
+    state.recordingStartedAt = performance.now();
+
+    state.mediaRecorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size > 0) state.recordingChunks.push(event.data);
+    });
+
+    state.mediaRecorder.addEventListener("stop", async () => {
+      stream.getTracks().forEach((track) => track.stop());
+      const type = state.recordingChunks[0]?.type || "audio/webm";
+      state.recordedBlob = new Blob(state.recordingChunks, { type });
+      state.recordedUrl = URL.createObjectURL(state.recordedBlob);
+      els.playMineButton.disabled = false;
+      els.recordButton.textContent = "録音開始";
+      els.recordButton.classList.remove("recording");
+      setStatus("録音完了");
+      await analyzeRecording();
+    });
+
+    state.mediaRecorder.start();
+    els.recordButton.textContent = "録音停止";
+    els.recordButton.classList.add("recording");
+    setStatus("録音中");
+  } catch (error) {
+    setStatus("マイクの使用が許可されませんでした");
+  }
+}
+
+function pickMimeType() {
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/mpeg",
+  ];
+  return candidates.find((type) => window.MediaRecorder?.isTypeSupported(type));
+}
+
+function playRecording() {
+  if (!state.recordedUrl) return;
+  const audio = new Audio(state.recordedUrl);
+  audio.play();
+}
+
+async function analyzeRecording() {
+  const buffer = await state.recordedBlob.arrayBuffer();
+  const audioContext = getAudioContext();
+  const audioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
+  const samples = audioBuffer.getChannelData(0);
+  const envelope = createEnvelope(samples, 160);
+  const metrics = getRecordingMetrics(samples, audioBuffer.duration);
+  state.lastMetrics = metrics;
+  drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
+  renderScores(metrics);
+}
+
+function getAudioContext() {
+  if (!state.audioContext) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    state.audioContext = new AudioContextClass();
+  }
+  return state.audioContext;
+}
+
+function createEnvelope(samples, bucketCount) {
+  const bucketSize = Math.max(1, Math.floor(samples.length / bucketCount));
+  const envelope = [];
+  for (let i = 0; i < bucketCount; i += 1) {
+    let sum = 0;
+    const start = i * bucketSize;
+    const end = Math.min(samples.length, start + bucketSize);
+    for (let j = start; j < end; j += 1) {
+      sum += Math.abs(samples[j]);
+    }
+    envelope.push(sum / Math.max(1, end - start));
+  }
+  return normalize(envelope);
+}
+
+function normalize(values) {
+  const max = Math.max(...values, 0.001);
+  return values.map((value) => value / max);
+}
+
+function getRecordingMetrics(samples, duration) {
+  let sumSquares = 0;
+  let peak = 0;
+  for (const sample of samples) {
+    const abs = Math.abs(sample);
+    peak = Math.max(peak, abs);
+    sumSquares += sample * sample;
+  }
+  const rms = Math.sqrt(sumSquares / samples.length);
+  const expected = expectedDuration(currentWord().spelling);
+  const durationScore = clamp(100 - Math.abs(duration - expected) * 35, 20, 100);
+  const volumeScore = clamp((rms / 0.09) * 100, 15, 100);
+  const focusScore = estimateFocusScore(currentWord().spelling, duration, peak);
+  const overall = Math.round(durationScore * 0.38 + volumeScore * 0.32 + focusScore * 0.3);
+  return {
+    duration,
+    expected,
+    rms,
+    peak,
+    durationScore: Math.round(durationScore),
+    volumeScore: Math.round(volumeScore),
+    focusScore: Math.round(focusScore),
+    overall,
+  };
+}
+
+function expectedDuration(word) {
+  const letters = word.replace(/[^a-z]/gi, "").length;
+  return clamp(0.5 + letters * 0.085, 0.75, 1.9);
+}
+
+function estimateFocusScore(word, duration, peak) {
+  const focus = getFocusSounds(word);
+  const count = Number(focus.ae) + Number(focus.th) + Number(focus.r);
+  if (count === 0) return 88;
+  const enoughLength = duration > expectedDuration(word) * 0.75 ? 100 : 65;
+  const enoughSound = peak > 0.08 ? 100 : 72;
+  return (enoughLength + enoughSound) / 2 - (3 - count) * 2;
+}
+
+function renderScores(metrics) {
+  els.overallScore.textContent = metrics.overall;
+  els.durationScore.textContent = metrics.durationScore;
+  els.volumeScore.textContent = metrics.volumeScore;
+  els.focusScore.textContent = metrics.focusScore;
+  setStatus(`録音 ${metrics.duration.toFixed(1)}秒 / 目安 ${metrics.expected.toFixed(1)}秒`);
+}
+
+function resetScores() {
+  els.overallScore.textContent = "--";
+  els.durationScore.textContent = "--";
+  els.volumeScore.textContent = "--";
+  els.focusScore.textContent = "--";
+}
+
+function getFocusSounds(word) {
+  const normalized = word.toLowerCase();
+  return {
+    ae: /a/.test(normalized) && !/(ar|air|aw|ay|all)/.test(normalized),
+    th: /th/.test(normalized),
+    r: /r/.test(normalized),
+  };
+}
+
+function drawModelWave(word) {
+  const duration = expectedDuration(word);
+  const points = 160;
+  const syllableHint = Math.max(1, Math.min(4, Math.round(word.length / 4)));
+  const envelope = Array.from({ length: points }, (_, index) => {
+    const t = index / (points - 1);
+    const pulse = Math.sin(t * Math.PI * syllableHint) ** 2;
+    const taper = Math.sin(t * Math.PI);
+    const consonant = getFocusSounds(word).th && t > 0.2 && t < 0.48 ? 0.18 : 0;
+    return Math.max(0.04, (pulse * 0.8 + consonant) * taper * duration);
+  });
+  drawEnvelope(els.modelCanvas, normalize(envelope), "#157f7f");
+}
+
+function drawEnvelope(canvas, envelope, color) {
+  const context = canvas.getContext("2d");
+  const { width, height } = canvas;
+  context.clearRect(0, 0, width, height);
+  drawGrid(context, width, height);
+  const center = height / 2;
+  const step = width / Math.max(1, envelope.length - 1);
+
+  context.beginPath();
+  envelope.forEach((value, index) => {
+    const x = index * step;
+    const y = center - value * center * 0.82;
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  for (let index = envelope.length - 1; index >= 0; index -= 1) {
+    const x = index * step;
+    const y = center + envelope[index] * center * 0.82;
+    context.lineTo(x, y);
+  }
+  context.closePath();
+  context.fillStyle = color;
+  context.globalAlpha = 0.22;
+  context.fill();
+  context.globalAlpha = 1;
+  context.strokeStyle = color;
+  context.lineWidth = 2;
+  context.stroke();
+}
+
+function drawGrid(context, width, height) {
+  context.fillStyle = "#fbfcfd";
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = "#e6ebef";
+  context.lineWidth = 1;
+  for (let i = 1; i < 4; i += 1) {
+    const y = (height / 4) * i;
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+}
+
+function clearCanvas(canvas, text) {
+  const context = canvas.getContext("2d");
+  const { width, height } = canvas;
+  drawGrid(context, width, height);
+  context.fillStyle = "#66727c";
+  context.font = "24px system-ui, sans-serif";
+  context.textAlign = "center";
+  context.fillText(text, width / 2, height / 2 + 8);
+}
+
+function clearRecording() {
+  if (state.recordedUrl) URL.revokeObjectURL(state.recordedUrl);
+  state.recordedBlob = null;
+  state.recordedUrl = null;
+  state.recordingChunks = [];
+  state.lastMetrics = null;
+  els.playMineButton.disabled = true;
+}
+
+function setStatus(text) {
+  els.recordingStatus.textContent = text;
+}
+
+async function loadSelectedFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const text = await file.text();
+  loadWordsFromText(text);
+}
+
+function loadPastedWords() {
+  loadWordsFromText(els.wordPaste.value);
+}
+
+function loadWordsFromText(text) {
+  const parsed = parseWordText(text);
+  if (!parsed.length) {
+    setStatus("単語リストを読み込めませんでした");
+    return;
+  }
+  state.words = parsed;
+  state.index = 0;
+  clearRecording();
+  setStatus(`${parsed.length}語を読み込みました`);
+  render();
+}
+
+function runRecognitionCheck() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    els.recognitionResult.textContent = "このブラウザは音声認識に対応していません";
+    return;
+  }
+
+  const startedAt = performance.now();
+  const recognition = new Recognition();
+  recognition.lang = "en-US";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  els.recognitionResult.textContent = "聞き取り中";
+
+  recognition.onresult = (event) => {
+    const elapsed = Math.round(performance.now() - startedAt);
+    const text = event.results[0][0].transcript;
+    els.recognitionResult.textContent = `${elapsed}ms: "${text}"`;
+  };
+  recognition.onerror = (event) => {
+    els.recognitionResult.textContent = `認識エラー: ${event.error}`;
+  };
+  recognition.onend = () => {
+    if (els.recognitionResult.textContent === "聞き取り中") {
+      els.recognitionResult.textContent = "音声を検出できませんでした";
+    }
+  };
+  recognition.start();
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+    </script>
+  </body>
+</html>
