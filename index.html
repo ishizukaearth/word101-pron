@@ -131,6 +131,10 @@ progress {
   font-weight: 800;
 }
 
+.focus-letter {
+  color: #c5362f;
+}
+
 .meaning {
   margin-top: 8px;
   color: var(--muted);
@@ -295,7 +299,17 @@ textarea {
   padding: 10px;
 }
 
+select {
+  min-height: 46px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #fff;
+}
+
 #loadPasteButton,
+#loadHostedButton,
 #recognitionButton {
   background: #26343d;
   color: #fff;
@@ -328,7 +342,6 @@ textarea {
     grid-template-columns: repeat(2, 1fr);
   }
 }
-
 
     </style>
   </head>
@@ -409,8 +422,25 @@ textarea {
         <details>
           <summary>単語リストを読み込む</summary>
           <div class="import-grid">
+            <select id="hostedWordSelect" aria-label="公開済み単語ファイル">
+              <option value="JH001.txt">JH001.txt</option>
+              <option value="JH101.txt">JH101.txt</option>
+              <option value="JH201.txt">JH201.txt</option>
+              <option value="JH301.txt">JH301.txt</option>
+              <option value="JH401.txt">JH401.txt</option>
+              <option value="JH501.txt">JH501.txt</option>
+              <option value="JH601.txt">JH601.txt</option>
+              <option value="JH701.txt">JH701.txt</option>
+              <option value="JH801.txt">JH801.txt</option>
+              <option value="JH901.txt">JH901.txt</option>
+              <option value="JH1001.txt">JH1001.txt</option>
+              <option value="JH1101.txt">JH1101.txt</option>
+              <option value="JH1201.txt">JH1201.txt</option>
+              <option value="JH1301.txt">JH1301.txt</option>
+            </select>
+            <button id="loadHostedButton" type="button">公開済みリストを読み込む</button>
             <label class="file-box">
-              <span>JH101_001.txt を選択</span>
+              <span>端末内の単語ファイルを選択</span>
               <input id="fileInput" type="file" accept=".txt,text/plain">
             </label>
             <textarea id="wordPaste" placeholder="001#apple#りんご&#10;002#book#本"></textarea>
@@ -450,6 +480,7 @@ const state = {
   recordedBlob: null,
   recordedUrl: null,
   audioContext: null,
+  vad: null,
   recordingStartedAt: 0,
   lastMetrics: null,
 };
@@ -476,6 +507,8 @@ const els = {
   volumeScore: document.querySelector("#volumeScore"),
   focusScore: document.querySelector("#focusScore"),
   fileInput: document.querySelector("#fileInput"),
+  hostedWordSelect: document.querySelector("#hostedWordSelect"),
+  loadHostedButton: document.querySelector("#loadHostedButton"),
   wordPaste: document.querySelector("#wordPaste"),
   loadPasteButton: document.querySelector("#loadPasteButton"),
   recognitionButton: document.querySelector("#recognitionButton"),
@@ -483,13 +516,15 @@ const els = {
 };
 
 render();
+autoLoadDefaultWords();
 
 els.prevButton.addEventListener("click", () => moveWord(-1));
 els.nextButton.addEventListener("click", () => moveWord(1));
 els.speakButton.addEventListener("click", speakCurrentWord);
-els.recordButton.addEventListener("click", toggleRecording);
+els.recordButton.addEventListener("click", () => startRecording({ autoStop: true, source: "manual" }));
 els.playMineButton.addEventListener("click", playRecording);
 els.fileInput.addEventListener("change", loadSelectedFile);
+els.loadHostedButton.addEventListener("click", loadHostedWords);
 els.loadPasteButton.addEventListener("click", loadPastedWords);
 els.recognitionButton.addEventListener("click", runRecognitionCheck);
 
@@ -515,7 +550,7 @@ function render() {
   els.progressBar.max = state.words.length;
   els.progressBar.value = state.index + 1;
   els.wordNumber.textContent = word.id;
-  els.wordText.textContent = word.spelling;
+  els.wordText.innerHTML = renderFocusedSpelling(word.spelling);
   els.meaningText.textContent = word.meaning || "意味なし";
   els.prevButton.disabled = state.index === 0;
   els.nextButton.disabled = state.index === state.words.length - 1;
@@ -560,13 +595,16 @@ function speakCurrentWord() {
   utterance.rate = 0.82;
   utterance.pitch = 1;
   utterance.onstart = () => setStatus("モデル音声を再生中");
-  utterance.onend = () => setStatus("録音待機中");
+  utterance.onend = () => {
+    setStatus("0.1秒後に録音を開始します");
+    window.setTimeout(() => startRecording({ autoStop: true, source: "model" }), 100);
+  };
   window.speechSynthesis.speak(utterance);
 }
 
-async function toggleRecording() {
+async function startRecording({ autoStop, source }) {
   if (state.mediaRecorder?.state === "recording") {
-    state.mediaRecorder.stop();
+    stopRecording();
     return;
   }
 
@@ -577,6 +615,8 @@ async function toggleRecording() {
 
   try {
     clearRecording();
+    const audioContext = getAudioContext();
+    if (audioContext.state === "suspended") await audioContext.resume();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mimeType = pickMimeType();
     state.mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
@@ -588,24 +628,88 @@ async function toggleRecording() {
     });
 
     state.mediaRecorder.addEventListener("stop", async () => {
+      stopVad();
       stream.getTracks().forEach((track) => track.stop());
       const type = state.recordingChunks[0]?.type || "audio/webm";
-      state.recordedBlob = new Blob(state.recordingChunks, { type });
-      state.recordedUrl = URL.createObjectURL(state.recordedBlob);
-      els.playMineButton.disabled = false;
+      const rawBlob = new Blob(state.recordingChunks, { type });
       els.recordButton.textContent = "録音開始";
       els.recordButton.classList.remove("recording");
       setStatus("録音完了");
-      await analyzeRecording();
+      await analyzeRecording(rawBlob);
     });
 
-    state.mediaRecorder.start();
+    state.mediaRecorder.start(100);
     els.recordButton.textContent = "録音停止";
     els.recordButton.classList.add("recording");
-    setStatus("録音中");
+    setStatus(source === "model" ? "復唱してください" : "録音中");
+    if (autoStop) startVad(stream);
   } catch (error) {
     setStatus("マイクの使用が許可されませんでした");
   }
+}
+
+function stopRecording() {
+  if (state.mediaRecorder?.state === "recording") {
+    state.mediaRecorder.stop();
+  }
+}
+
+function startVad(stream) {
+  stopVad();
+  const audioContext = getAudioContext();
+  const source = audioContext.createMediaStreamSource(stream);
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
+
+  const data = new Float32Array(analyser.fftSize);
+  const threshold = 0.025;
+  const silenceAfterSpeechMs = 200;
+  const maxRecordingMs = 6000;
+  const minSpeechMs = 120;
+  let hasSpeech = false;
+  let speechStartedAt = 0;
+  let silentSince = 0;
+
+  const tick = () => {
+    if (state.mediaRecorder?.state !== "recording") return;
+    analyser.getFloatTimeDomainData(data);
+    const rms = getRms(data);
+    const now = performance.now();
+    const isSpeech = rms >= threshold;
+
+    if (isSpeech) {
+      if (!hasSpeech) {
+        hasSpeech = true;
+        speechStartedAt = now;
+        setStatus("発声を検出しました");
+      }
+      silentSince = 0;
+    } else if (hasSpeech && !silentSince) {
+      silentSince = now;
+    }
+
+    const speechLongEnough = hasSpeech && now - speechStartedAt >= minSpeechMs;
+    const silenceLongEnough = silentSince && now - silentSince >= silenceAfterSpeechMs;
+    const timedOut = now - state.recordingStartedAt >= maxRecordingMs;
+
+    if ((speechLongEnough && silenceLongEnough) || timedOut) {
+      stopRecording();
+      return;
+    }
+
+    state.vad.frameId = requestAnimationFrame(tick);
+  };
+
+  state.vad = { frameId: requestAnimationFrame(tick), source, analyser };
+}
+
+function stopVad() {
+  if (!state.vad) return;
+  cancelAnimationFrame(state.vad.frameId);
+  state.vad.source.disconnect();
+  state.vad.analyser.disconnect();
+  state.vad = null;
 }
 
 function pickMimeType() {
@@ -624,14 +728,18 @@ function playRecording() {
   audio.play();
 }
 
-async function analyzeRecording() {
-  const buffer = await state.recordedBlob.arrayBuffer();
+async function analyzeRecording(rawBlob) {
+  const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
-  const audioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
+  const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
+  const audioBuffer = trimTrailingSilence(rawAudioBuffer, 0.2);
   const samples = audioBuffer.getChannelData(0);
   const envelope = createEnvelope(samples, 160);
-  const metrics = getRecordingMetrics(samples, audioBuffer.duration);
+  const metrics = getRecordingMetrics(samples, audioBuffer.duration, envelope);
   state.lastMetrics = metrics;
+  state.recordedBlob = encodeWav(audioBuffer);
+  state.recordedUrl = URL.createObjectURL(state.recordedBlob);
+  els.playMineButton.disabled = false;
   drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
   renderScores(metrics);
 }
@@ -659,12 +767,22 @@ function createEnvelope(samples, bucketCount) {
   return normalize(envelope);
 }
 
+function trimTrailingSilence(audioBuffer, secondsToCut) {
+  const sampleRate = audioBuffer.sampleRate;
+  const cutSamples = Math.round(secondsToCut * sampleRate);
+  const source = audioBuffer.getChannelData(0);
+  const targetLength = Math.max(1, source.length - cutSamples);
+  const trimmed = getAudioContext().createBuffer(1, targetLength, sampleRate);
+  trimmed.copyToChannel(source.slice(0, targetLength), 0);
+  return trimmed;
+}
+
 function normalize(values) {
   const max = Math.max(...values, 0.001);
   return values.map((value) => value / max);
 }
 
-function getRecordingMetrics(samples, duration) {
+function getRecordingMetrics(samples, duration, envelope) {
   let sumSquares = 0;
   let peak = 0;
   for (const sample of samples) {
@@ -676,7 +794,7 @@ function getRecordingMetrics(samples, duration) {
   const expected = expectedDuration(currentWord().spelling);
   const durationScore = clamp(100 - Math.abs(duration - expected) * 35, 20, 100);
   const volumeScore = clamp((rms / 0.09) * 100, 15, 100);
-  const focusScore = estimateFocusScore(currentWord().spelling, duration, peak);
+  const focusScore = estimateFocusScore(currentWord().spelling, envelope, peak);
   const overall = Math.round(durationScore * 0.38 + volumeScore * 0.32 + focusScore * 0.3);
   return {
     duration,
@@ -695,13 +813,23 @@ function expectedDuration(word) {
   return clamp(0.5 + letters * 0.085, 0.75, 1.9);
 }
 
-function estimateFocusScore(word, duration, peak) {
-  const focus = getFocusSounds(word);
-  const count = Number(focus.ae) + Number(focus.th) + Number(focus.r);
-  if (count === 0) return 88;
-  const enoughLength = duration > expectedDuration(word) * 0.75 ? 100 : 65;
-  const enoughSound = peak > 0.08 ? 100 : 72;
-  return (enoughLength + enoughSound) / 2 - (3 - count) * 2;
+function estimateFocusScore(word, envelope, peak) {
+  const matches = getFocusMatches(word);
+  if (!matches.length) return 88;
+  const averageEnergy = envelope.reduce((sum, value) => sum + value, 0) / envelope.length;
+  const scores = matches.map((match) => {
+    const center = ((match.start + match.end) / 2) / Math.max(1, word.length);
+    const halfWindow = match.kind === "th" ? 0.08 : 0.06;
+    const from = Math.max(0, Math.floor((center - halfWindow) * envelope.length));
+    const to = Math.min(envelope.length, Math.ceil((center + halfWindow) * envelope.length));
+    const local = envelope.slice(from, to);
+    const localEnergy = local.reduce((sum, value) => sum + value, 0) / Math.max(1, local.length);
+    const relativeEnergy = localEnergy / Math.max(averageEnergy, 0.05);
+    const energyScore = clamp(relativeEnergy * 74, 35, 100);
+    const peakScore = peak > 0.08 ? 100 : 72;
+    return energyScore * 0.7 + peakScore * 0.3;
+  });
+  return scores.reduce((sum, score) => sum + score, 0) / scores.length;
 }
 
 function renderScores(metrics) {
@@ -720,12 +848,61 @@ function resetScores() {
 }
 
 function getFocusSounds(word) {
-  const normalized = word.toLowerCase();
+  const matches = getFocusMatches(word);
   return {
-    ae: /a/.test(normalized) && !/(ar|air|aw|ay|all)/.test(normalized),
-    th: /th/.test(normalized),
-    r: /r/.test(normalized),
+    ae: matches.some((match) => match.kind === "ae"),
+    th: matches.some((match) => match.kind === "th"),
+    r: matches.some((match) => match.kind === "r"),
   };
+}
+
+function getFocusMatches(word) {
+  const normalized = word.toLowerCase();
+  const matches = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const pair = normalized.slice(index, index + 2);
+    if (pair === "th") {
+      matches.push({ start: index, end: index + 2, kind: "th" });
+      index += 1;
+      continue;
+    }
+
+    const char = normalized[index];
+    const nextTwo = normalized.slice(index, index + 2);
+    const nextThree = normalized.slice(index, index + 3);
+    if (char === "a" && !["ar", "ai", "ay", "aw", "au"].includes(nextTwo) && nextThree !== "all") {
+      matches.push({ start: index, end: index + 1, kind: "ae" });
+    }
+    if (char === "r") {
+      matches.push({ start: index, end: index + 1, kind: "r" });
+    }
+  }
+  return matches;
+}
+
+function renderFocusedSpelling(word) {
+  const matches = getFocusMatches(word);
+  if (!matches.length) return escapeHtml(word);
+  let html = "";
+  let cursor = 0;
+  for (const match of matches) {
+    if (match.start < cursor) continue;
+    html += escapeHtml(word.slice(cursor, match.start));
+    html += `<span class="focus-letter focus-${match.kind}">${escapeHtml(word.slice(match.start, match.end))}</span>`;
+    cursor = match.end;
+  }
+  html += escapeHtml(word.slice(cursor));
+  return html;
+}
+
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  }[char]));
 }
 
 function drawModelWave(word) {
@@ -797,6 +974,7 @@ function clearCanvas(canvas, text) {
 }
 
 function clearRecording() {
+  stopVad();
   if (state.recordedUrl) URL.revokeObjectURL(state.recordedUrl);
   state.recordedBlob = null;
   state.recordedUrl = null;
@@ -814,6 +992,30 @@ async function loadSelectedFile(event) {
   if (!file) return;
   const text = await file.text();
   loadWordsFromText(text);
+}
+
+async function loadHostedWords() {
+  const fileName = els.hostedWordSelect.value;
+  try {
+    setStatus(`${fileName} を読み込み中`);
+    const response = await fetch(`words/${fileName}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    loadWordsFromText(text);
+  } catch (error) {
+    setStatus(`words/${fileName} を読み込めませんでした`);
+  }
+}
+
+async function autoLoadDefaultWords() {
+  try {
+    const response = await fetch("words/JH001.txt", { cache: "no-store" });
+    if (!response.ok) return;
+    const text = await response.text();
+    loadWordsFromText(text);
+  } catch (error) {
+    setStatus("録音待機中");
+  }
 }
 
 function loadPastedWords() {
@@ -865,6 +1067,50 @@ function runRecognitionCheck() {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getRms(samples) {
+  let sumSquares = 0;
+  for (const sample of samples) sumSquares += sample * sample;
+  return Math.sqrt(sumSquares / samples.length);
+}
+
+function encodeWav(audioBuffer) {
+  const samples = audioBuffer.getChannelData(0);
+  const sampleRate = audioBuffer.sampleRate;
+  const bytesPerSample = 2;
+  const blockAlign = bytesPerSample;
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, samples.length * bytesPerSample, true);
+
+  let offset = 44;
+  for (const sample of samples) {
+    const clipped = clamp(sample, -1, 1);
+    view.setInt16(offset, clipped < 0 ? clipped * 0x8000 : clipped * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeString(view, offset, value) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
 }
 
     </script>
