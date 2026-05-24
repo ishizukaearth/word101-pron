@@ -282,13 +282,14 @@ canvas {
   background: #fbfcfd;
 }
 
-#spectrumCanvas {
+#spectrumCanvas,
+#modelSpectrumCanvas {
   height: 190px;
 }
 
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
   margin-top: 12px;
 }
@@ -371,7 +372,7 @@ select {
   }
 
   .feature-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -440,7 +441,7 @@ select {
         </div>
         <div class="wave-stack">
           <div>
-            <div class="wave-label">モデル目安</div>
+            <div class="wave-label">モデル録音</div>
             <canvas id="modelCanvas" width="900" height="180"></canvas>
           </div>
           <div>
@@ -455,7 +456,16 @@ select {
           <h2>スペクトラム分析</h2>
           <span id="analysisLatency">未解析</span>
         </div>
-        <canvas id="spectrumCanvas" width="900" height="260"></canvas>
+        <div class="wave-stack">
+          <div>
+            <div class="wave-label">モデル録音</div>
+            <canvas id="modelSpectrumCanvas" width="900" height="260"></canvas>
+          </div>
+          <div>
+            <div class="wave-label">あなたの録音</div>
+            <canvas id="spectrumCanvas" width="900" height="260"></canvas>
+          </div>
+        </div>
         <div class="feature-grid">
           <div class="score-tile">
             <span class="label">母音帯域</span>
@@ -468,6 +478,10 @@ select {
           <div class="score-tile">
             <span class="label">/th/高域</span>
             <strong id="thFeature">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">母音一致</span>
+            <strong id="formantMatch">--</strong>
           </div>
         </div>
       </section>
@@ -513,27 +527,22 @@ select {
     </main>
 
     <script>
-const fallbackWordsText = `001#apple#りんご
-002#bag#かばん
-003#thank#感謝する
-004#three#3
-005#think#考える
-006#red#赤い
-007#right#右、正しい
-008#read#読む
-009#cat#猫
-010#that#あれ、それ
-011#river#川
-012#around#周囲に`;
+const fallbackWordsText = "";
 
 const state = {
   words: parseWordText(fallbackWordsText),
   index: -1,
   micStream: null,
   mediaRecorder: null,
+  modelRecorder: null,
   recordingChunks: [],
+  modelRecordingChunks: [],
   recordedBlob: null,
   recordedUrl: null,
+  modelBlob: null,
+  modelUrl: null,
+  modelAnalysis: null,
+  userAnalysis: null,
   audioContext: null,
   vad: null,
   recordingStartedAt: 0,
@@ -556,6 +565,7 @@ const els = {
   playMineButton: document.querySelector("#playMineButton"),
   modelCanvas: document.querySelector("#modelCanvas"),
   userCanvas: document.querySelector("#userCanvas"),
+  modelSpectrumCanvas: document.querySelector("#modelSpectrumCanvas"),
   spectrumCanvas: document.querySelector("#spectrumCanvas"),
   recordingStatus: document.querySelector("#recordingStatus"),
   analysisLatency: document.querySelector("#analysisLatency"),
@@ -566,6 +576,7 @@ const els = {
   vowelFeature: document.querySelector("#vowelFeature"),
   rFeature: document.querySelector("#rFeature"),
   thFeature: document.querySelector("#thFeature"),
+  formantMatch: document.querySelector("#formantMatch"),
   fileInput: document.querySelector("#fileInput"),
   hostedWordSelect: document.querySelector("#hostedWordSelect"),
   loadHostedButton: document.querySelector("#loadHostedButton"),
@@ -609,13 +620,17 @@ function render() {
   const word = currentWord();
   const currentNumber = state.index < 0 ? 0 : state.index + 1;
   els.progressText.textContent = `${currentNumber} / ${state.words.length}`;
-  els.progressBar.max = state.words.length;
+  els.progressBar.max = Math.max(1, state.words.length);
   els.progressBar.value = currentNumber;
   els.wordNumber.textContent = word?.id || "---";
   els.wordText.innerHTML = word ? renderFocusedSpelling(word.spelling) : "▶";
-  els.meaningText.textContent = word ? (word.meaning || "意味なし") : "右矢印で最初の単語を開始";
+  els.meaningText.textContent = word
+    ? (word.meaning || "意味なし")
+    : state.words.length
+      ? "右矢印で最初の単語を開始"
+      : "単語リストを読み込んでください";
   els.prevButton.disabled = state.index <= 0;
-  els.nextButton.disabled = state.index === state.words.length - 1;
+  els.nextButton.disabled = !state.words.length || state.index === state.words.length - 1;
   els.playMineButton.disabled = !state.recordedBlob;
   els.recordButton.disabled = state.index < 0;
 
@@ -624,8 +639,8 @@ function render() {
   setChip(els.thChip, focus.th);
   setChip(els.rChip, focus.r);
 
-  if (word) drawModelWave(word.spelling);
-  else clearCanvas(els.modelCanvas, "右矢印で開始します");
+  if (!word) clearCanvas(els.modelCanvas, "右矢印で開始します");
+  else if (!state.modelAnalysis) clearCanvas(els.modelCanvas, "モデル音声を録音して表示します");
   if (!state.recordedBlob) {
     clearCanvas(els.userCanvas, "録音するとここに波形が表示されます");
     clearCanvas(els.spectrumCanvas, "録音後にスペクトログラムを表示します");
@@ -650,7 +665,7 @@ function moveWord(delta) {
 function nextPractice() {
   if (state.index < state.words.length - 1) {
     state.index += 1;
-    clearRecording();
+    clearRecording({ preserveModel: true });
     render();
     speakCurrentWord({ recordAfter: true });
   }
@@ -661,7 +676,7 @@ function retryRecording() {
   startRecording({ autoStop: true, source: "manual" });
 }
 
-function speakCurrentWord({ recordAfter }) {
+async function speakCurrentWord({ recordAfter }) {
   const current = currentWord();
   if (!current) return;
   const word = current.spelling;
@@ -670,13 +685,18 @@ function speakCurrentWord({ recordAfter }) {
     return;
   }
 
+  const modelCapture = recordAfter ? await startModelCapture() : null;
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(word);
   utterance.lang = "en-US";
   utterance.rate = 0.82;
   utterance.pitch = 1;
   utterance.onstart = () => setStatus("モデル音声を再生中");
-  utterance.onend = () => {
+  utterance.onend = async () => {
+    if (modelCapture) {
+      const rawModelBlob = await stopModelCapture(modelCapture);
+      await analyzeRecording(rawModelBlob, "model");
+    }
     if (recordAfter) {
       setStatus("0.1秒後に録音を開始します");
       window.setTimeout(() => startRecording({ autoStop: true, source: "model" }), 100);
@@ -685,6 +705,33 @@ function speakCurrentWord({ recordAfter }) {
     }
   };
   window.speechSynthesis.speak(utterance);
+}
+
+async function startModelCapture() {
+  const stream = await ensureMicrophoneStream();
+  const mimeType = pickMimeType();
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  recorder.addEventListener("dataavailable", (event) => {
+    if (event.data.size > 0) chunks.push(event.data);
+  });
+  recorder.start(100);
+  state.modelRecorder = recorder;
+  state.modelRecordingChunks = chunks;
+  return { recorder, chunks };
+}
+
+function stopModelCapture(capture) {
+  return new Promise((resolve) => {
+    const finish = () => {
+      const type = capture.chunks[0]?.type || "audio/webm";
+      resolve(new Blob(capture.chunks, { type }));
+    };
+    capture.recorder.addEventListener("stop", finish, { once: true });
+    window.setTimeout(() => {
+      if (capture.recorder.state === "recording") capture.recorder.stop();
+    }, 80);
+  });
 }
 
 async function startRecording({ autoStop, source }) {
@@ -720,7 +767,8 @@ async function startRecording({ autoStop, source }) {
       els.recordButton.classList.remove("recording");
       els.playMineButton.classList.remove("recording");
       setStatus("録音完了");
-      await analyzeRecording(rawBlob);
+      await analyzeRecording(rawBlob, "user");
+      releaseMicrophoneStream();
     });
 
     state.mediaRecorder.start(100);
@@ -743,6 +791,7 @@ async function requestMicrophoneAccess() {
 
   try {
     await ensureMicrophoneStream();
+    releaseMicrophoneStream();
     setStatus("マイク準備完了。右矢印で開始");
   } catch (error) {
     setStatus("マイク許可待ち。右矢印または録音開始で再確認します");
@@ -753,12 +802,18 @@ async function ensureMicrophoneStream() {
   if (state.micStream?.active) return state.micStream;
   state.micStream = await navigator.mediaDevices.getUserMedia({
     audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
     },
   });
   return state.micStream;
+}
+
+function releaseMicrophoneStream() {
+  if (!state.micStream) return;
+  state.micStream.getTracks().forEach((track) => track.stop());
+  state.micStream = null;
 }
 
 function stopRecording() {
@@ -838,10 +893,11 @@ function pickMimeType() {
 function playRecording() {
   if (!state.recordedUrl) return;
   const audio = new Audio(state.recordedUrl);
+  audio.volume = 1;
   audio.play();
 }
 
-async function analyzeRecording(rawBlob) {
+async function analyzeRecording(rawBlob, target) {
   const analysisStartedAt = performance.now();
   const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
@@ -855,14 +911,27 @@ async function analyzeRecording(rawBlob) {
   const envelope = createEnvelope(samples, 160);
   const metrics = getRecordingMetrics(samples, audioBuffer.duration, envelope);
   const spectral = analyzeSpectrum(samples, audioBuffer.sampleRate);
-  state.lastMetrics = metrics;
-  state.recordedBlob = encodeWav(audioBuffer);
-  state.recordedUrl = URL.createObjectURL(state.recordedBlob);
-  els.playMineButton.disabled = false;
-  drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
-  drawSpectrogram(els.spectrumCanvas, spectral);
-  renderSpectralFeatures(spectral, performance.now() - analysisStartedAt);
-  renderScores(metrics);
+  const analysis = { metrics, spectral, envelope };
+
+  if (target === "model") {
+    if (state.modelUrl) URL.revokeObjectURL(state.modelUrl);
+    state.modelAnalysis = analysis;
+    state.modelBlob = encodeWav(audioBuffer);
+    state.modelUrl = URL.createObjectURL(state.modelBlob);
+    drawEnvelope(els.modelCanvas, envelope, "#157f7f");
+    drawSpectrogram(els.modelSpectrumCanvas, spectral);
+  } else {
+    state.lastMetrics = metrics;
+    state.userAnalysis = analysis;
+    state.recordedBlob = encodeWav(audioBuffer);
+    if (state.recordedUrl) URL.revokeObjectURL(state.recordedUrl);
+    state.recordedUrl = URL.createObjectURL(state.recordedBlob);
+    els.playMineButton.disabled = false;
+    drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
+    drawSpectrogram(els.spectrumCanvas, spectral);
+    renderSpectralFeatures(spectral, performance.now() - analysisStartedAt);
+    renderScores(metrics);
+  }
 }
 
 function getAudioContext() {
@@ -981,6 +1050,7 @@ function resetScores() {
   els.vowelFeature.textContent = "--";
   els.rFeature.textContent = "--";
   els.thFeature.textContent = "--";
+  els.formantMatch.textContent = "--";
   els.analysisLatency.textContent = "未解析";
 }
 
@@ -1131,6 +1201,7 @@ function analyzeSpectrum(samples, sampleRate) {
     vowel: bandEnergy(safeFrames, sampleRate, fftSize, 500, 2500),
     rBand: bandEnergy(safeFrames, sampleRate, fftSize, 1200, 3000),
     thBand: bandEnergy(safeFrames, sampleRate, fftSize, 4000, 8000),
+    formants: estimateFormants(safeFrames, sampleRate, fftSize),
   };
 }
 
@@ -1191,6 +1262,46 @@ function bandEnergy(frames, sampleRate, fftSize, lowHz, highHz) {
   return total ? band / total : 0;
 }
 
+function estimateFormants(frames, sampleRate, fftSize) {
+  const average = new Float32Array(frames[0].length);
+  for (const frame of frames) {
+    for (let i = 0; i < frame.length; i += 1) average[i] += frame[i];
+  }
+  for (let i = 0; i < average.length; i += 1) average[i] /= frames.length;
+  smoothArrayInPlace(average, 5);
+
+  const f1 = findPeakFrequency(average, sampleRate, fftSize, 250, 1000);
+  const f2 = findPeakFrequency(average, sampleRate, fftSize, 900, 2800);
+  return { f1, f2 };
+}
+
+function smoothArrayInPlace(values, radius) {
+  const copy = values.slice();
+  for (let i = 0; i < values.length; i += 1) {
+    let sum = 0;
+    let count = 0;
+    for (let j = Math.max(0, i - radius); j <= Math.min(values.length - 1, i + radius); j += 1) {
+      sum += copy[j];
+      count += 1;
+    }
+    values[i] = sum / count;
+  }
+}
+
+function findPeakFrequency(values, sampleRate, fftSize, lowHz, highHz) {
+  const lowBin = Math.max(1, Math.floor((lowHz / sampleRate) * fftSize));
+  const highBin = Math.min(values.length - 1, Math.ceil((highHz / sampleRate) * fftSize));
+  let bestBin = lowBin;
+  let bestValue = -Infinity;
+  for (let bin = lowBin; bin <= highBin; bin += 1) {
+    if (values[bin] > bestValue) {
+      bestValue = values[bin];
+      bestBin = bin;
+    }
+  }
+  return Math.round((bestBin * sampleRate) / fftSize);
+}
+
 function drawSpectrogram(canvas, spectral) {
   const context = canvas.getContext("2d");
   const { width, height } = canvas;
@@ -1222,6 +1333,17 @@ function renderSpectralFeatures(spectral, elapsedMs) {
   els.vowelFeature.textContent = Math.round(spectral.vowel * 100);
   els.rFeature.textContent = Math.round(spectral.rBand * 100);
   els.thFeature.textContent = Math.round(spectral.thBand * 100);
+  els.formantMatch.textContent = getFormantMatchText();
+}
+
+function getFormantMatchText() {
+  if (!state.modelAnalysis || !state.userAnalysis) return "--";
+  const model = state.modelAnalysis.spectral.formants;
+  const user = state.userAnalysis.spectral.formants;
+  const f1Diff = Math.abs(model.f1 - user.f1);
+  const f2Diff = Math.abs(model.f2 - user.f2);
+  const score = clamp(100 - (f1Diff / 8 + f2Diff / 18), 0, 100);
+  return `${Math.round(score)} (${user.f1}/${user.f2})`;
 }
 
 function clearCanvas(canvas, text) {
@@ -1234,11 +1356,18 @@ function clearCanvas(canvas, text) {
   context.fillText(text, width / 2, height / 2 + 8);
 }
 
-function clearRecording() {
+function clearRecording({ preserveModel = false } = {}) {
   stopVad();
   if (state.recordedUrl) URL.revokeObjectURL(state.recordedUrl);
   state.recordedBlob = null;
   state.recordedUrl = null;
+  if (!preserveModel) {
+    if (state.modelUrl) URL.revokeObjectURL(state.modelUrl);
+    state.modelBlob = null;
+    state.modelUrl = null;
+    state.modelAnalysis = null;
+  }
+  state.userAnalysis = null;
   state.recordingChunks = [];
   state.lastMetrics = null;
   els.playMineButton.disabled = true;
@@ -1273,11 +1402,11 @@ async function loadHostedWords() {
 async function autoLoadDefaultWords() {
   try {
     const response = await fetch("words/JH001.txt", { cache: "no-store" });
-    if (!response.ok) return;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const text = decodeWordFileBuffer(await response.arrayBuffer());
     loadWordsFromText(text);
   } catch (error) {
-    setStatus("録音待機中");
+    setStatus("words/JH001.txt を読み込めませんでした");
   }
 }
 
