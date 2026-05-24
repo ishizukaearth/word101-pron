@@ -195,6 +195,11 @@ button:disabled {
   color: #fff;
 }
 
+.main-button.recording {
+  animation: recordingPulse 0.8s ease-in-out infinite alternate;
+  background: #8ca4a6;
+}
+
 .record-button {
   background: var(--warn);
   color: #fff;
@@ -202,6 +207,16 @@ button:disabled {
 
 .record-button.recording {
   background: #9f2f2f;
+}
+
+@keyframes recordingPulse {
+  from {
+    opacity: 0.42;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .score-grid {
@@ -376,7 +391,7 @@ select {
         <div class="controls" aria-label="練習操作">
           <button class="icon-button" id="prevButton" type="button" title="前の単語">←</button>
           <button class="main-button" id="speakButton" type="button">モデル音声</button>
-          <button class="record-button" id="recordButton" type="button">録音開始</button>
+          <button class="record-button" id="recordButton" type="button">もう一度録音</button>
           <button class="main-button" id="playMineButton" type="button" disabled>自分を再生</button>
           <button class="icon-button" id="nextButton" type="button" title="次の単語">→</button>
         </div>
@@ -436,6 +451,7 @@ select {
               <option value="JH1001.txt">JH1001.txt</option>
               <option value="JH1101.txt">JH1101.txt</option>
               <option value="JH1201.txt">JH1201.txt</option>
+              <option value="JH1300.txt">JH1300.txt</option>
               <option value="JH1301.txt">JH1301.txt</option>
             </select>
             <button id="loadHostedButton" type="button">公開済みリストを読み込む</button>
@@ -474,7 +490,8 @@ const fallbackWordsText = `001#apple#りんご
 
 const state = {
   words: parseWordText(fallbackWordsText),
-  index: 0,
+  index: -1,
+  micStream: null,
   mediaRecorder: null,
   recordingChunks: [],
   recordedBlob: null,
@@ -517,11 +534,12 @@ const els = {
 
 render();
 autoLoadDefaultWords();
+requestMicrophoneAccess();
 
 els.prevButton.addEventListener("click", () => moveWord(-1));
-els.nextButton.addEventListener("click", () => moveWord(1));
-els.speakButton.addEventListener("click", speakCurrentWord);
-els.recordButton.addEventListener("click", () => startRecording({ autoStop: true, source: "manual" }));
+els.nextButton.addEventListener("click", nextPractice);
+els.speakButton.addEventListener("click", () => speakCurrentWord({ recordAfter: false }));
+els.recordButton.addEventListener("click", retryRecording);
 els.playMineButton.addEventListener("click", playRecording);
 els.fileInput.addEventListener("change", loadSelectedFile);
 els.loadHostedButton.addEventListener("click", loadHostedWords);
@@ -546,22 +564,25 @@ function parseWordText(text) {
 
 function render() {
   const word = currentWord();
-  els.progressText.textContent = `${state.index + 1} / ${state.words.length}`;
+  const currentNumber = state.index < 0 ? 0 : state.index + 1;
+  els.progressText.textContent = `${currentNumber} / ${state.words.length}`;
   els.progressBar.max = state.words.length;
-  els.progressBar.value = state.index + 1;
-  els.wordNumber.textContent = word.id;
-  els.wordText.innerHTML = renderFocusedSpelling(word.spelling);
-  els.meaningText.textContent = word.meaning || "意味なし";
-  els.prevButton.disabled = state.index === 0;
+  els.progressBar.value = currentNumber;
+  els.wordNumber.textContent = word?.id || "---";
+  els.wordText.innerHTML = word ? renderFocusedSpelling(word.spelling) : "▶";
+  els.meaningText.textContent = word ? (word.meaning || "意味なし") : "右矢印で最初の単語を開始";
+  els.prevButton.disabled = state.index <= 0;
   els.nextButton.disabled = state.index === state.words.length - 1;
   els.playMineButton.disabled = !state.recordedBlob;
+  els.recordButton.disabled = state.index < 0;
 
-  const focus = getFocusSounds(word.spelling);
+  const focus = word ? getFocusSounds(word.spelling) : { ae: false, th: false, r: false };
   setChip(els.aeChip, focus.ae);
   setChip(els.thChip, focus.th);
   setChip(els.rChip, focus.r);
 
-  drawModelWave(word.spelling);
+  if (word) drawModelWave(word.spelling);
+  else clearCanvas(els.modelCanvas, "右矢印で開始します");
   if (!state.recordedBlob) {
     clearCanvas(els.userCanvas, "録音するとここに波形が表示されます");
     resetScores();
@@ -569,7 +590,7 @@ function render() {
 }
 
 function currentWord() {
-  return state.words[state.index];
+  return state.index >= 0 ? state.words[state.index] : null;
 }
 
 function setChip(element, active) {
@@ -582,8 +603,24 @@ function moveWord(delta) {
   render();
 }
 
-function speakCurrentWord() {
-  const word = currentWord().spelling;
+function nextPractice() {
+  if (state.index < state.words.length - 1) {
+    state.index += 1;
+    clearRecording();
+    render();
+    speakCurrentWord({ recordAfter: true });
+  }
+}
+
+function retryRecording() {
+  if (state.index < 0) return;
+  startRecording({ autoStop: true, source: "manual" });
+}
+
+function speakCurrentWord({ recordAfter }) {
+  const current = currentWord();
+  if (!current) return;
+  const word = current.spelling;
   if (!("speechSynthesis" in window)) {
     setStatus("このブラウザは読み上げに対応していません");
     return;
@@ -596,8 +633,12 @@ function speakCurrentWord() {
   utterance.pitch = 1;
   utterance.onstart = () => setStatus("モデル音声を再生中");
   utterance.onend = () => {
-    setStatus("0.1秒後に録音を開始します");
-    window.setTimeout(() => startRecording({ autoStop: true, source: "model" }), 100);
+    if (recordAfter) {
+      setStatus("0.1秒後に録音を開始します");
+      window.setTimeout(() => startRecording({ autoStop: true, source: "model" }), 100);
+    } else {
+      setStatus("聞き比べできます");
+    }
   };
   window.speechSynthesis.speak(utterance);
 }
@@ -617,7 +658,7 @@ async function startRecording({ autoStop, source }) {
     clearRecording();
     const audioContext = getAudioContext();
     if (audioContext.state === "suspended") await audioContext.resume();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await ensureMicrophoneStream();
     const mimeType = pickMimeType();
     state.mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     state.recordingChunks = [];
@@ -629,11 +670,11 @@ async function startRecording({ autoStop, source }) {
 
     state.mediaRecorder.addEventListener("stop", async () => {
       stopVad();
-      stream.getTracks().forEach((track) => track.stop());
       const type = state.recordingChunks[0]?.type || "audio/webm";
       const rawBlob = new Blob(state.recordingChunks, { type });
-      els.recordButton.textContent = "録音開始";
+      els.recordButton.textContent = "もう一度録音";
       els.recordButton.classList.remove("recording");
+      els.playMineButton.classList.remove("recording");
       setStatus("録音完了");
       await analyzeRecording(rawBlob);
     });
@@ -641,11 +682,39 @@ async function startRecording({ autoStop, source }) {
     state.mediaRecorder.start(100);
     els.recordButton.textContent = "録音停止";
     els.recordButton.classList.add("recording");
+    els.playMineButton.disabled = true;
+    els.playMineButton.classList.add("recording");
     setStatus(source === "model" ? "復唱してください" : "録音中");
     if (autoStop) startVad(stream);
   } catch (error) {
     setStatus("マイクの使用が許可されませんでした");
   }
+}
+
+async function requestMicrophoneAccess() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("このブラウザは録音に対応していません");
+    return;
+  }
+
+  try {
+    await ensureMicrophoneStream();
+    setStatus("マイク準備完了。右矢印で開始");
+  } catch (error) {
+    setStatus("マイク許可待ち。右矢印または録音開始で再確認します");
+  }
+}
+
+async function ensureMicrophoneStream() {
+  if (state.micStream?.active) return state.micStream;
+  state.micStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
+  return state.micStream;
 }
 
 function stopRecording() {
@@ -732,7 +801,11 @@ async function analyzeRecording(rawBlob) {
   const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
   const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
-  const audioBuffer = trimTrailingSilence(rawAudioBuffer, 0.2);
+  const audioBuffer = trimSpeechBuffer(rawAudioBuffer, {
+    leadingThreshold: 0.018,
+    trailingSecondsToCut: 0.2,
+    leadingPrerollSeconds: 0.03,
+  });
   const samples = audioBuffer.getChannelData(0);
   const envelope = createEnvelope(samples, 160);
   const metrics = getRecordingMetrics(samples, audioBuffer.duration, envelope);
@@ -767,13 +840,25 @@ function createEnvelope(samples, bucketCount) {
   return normalize(envelope);
 }
 
-function trimTrailingSilence(audioBuffer, secondsToCut) {
+function trimSpeechBuffer(audioBuffer, options) {
   const sampleRate = audioBuffer.sampleRate;
-  const cutSamples = Math.round(secondsToCut * sampleRate);
   const source = audioBuffer.getChannelData(0);
-  const targetLength = Math.max(1, source.length - cutSamples);
+  const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
+  let speechStart = 0;
+
+  for (let index = 0; index < source.length; index += windowSize) {
+    const end = Math.min(source.length, index + windowSize);
+    if (getRms(source.subarray(index, end)) >= options.leadingThreshold) {
+      speechStart = Math.max(0, index - Math.round(options.leadingPrerollSeconds * sampleRate));
+      break;
+    }
+  }
+
+  const cutSamples = Math.round(options.trailingSecondsToCut * sampleRate);
+  const speechEnd = Math.max(speechStart + 1, source.length - cutSamples);
+  const targetLength = Math.max(1, speechEnd - speechStart);
   const trimmed = getAudioContext().createBuffer(1, targetLength, sampleRate);
-  trimmed.copyToChannel(source.slice(0, targetLength), 0);
+  trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
   return trimmed;
 }
 
@@ -981,6 +1066,7 @@ function clearRecording() {
   state.recordingChunks = [];
   state.lastMetrics = null;
   els.playMineButton.disabled = true;
+  els.playMineButton.classList.remove("recording");
 }
 
 function setStatus(text) {
@@ -990,8 +1076,9 @@ function setStatus(text) {
 async function loadSelectedFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  const text = await file.text();
+  const text = decodeWordFileBuffer(await file.arrayBuffer());
   loadWordsFromText(text);
+  event.target.value = "";
 }
 
 async function loadHostedWords() {
@@ -1000,7 +1087,7 @@ async function loadHostedWords() {
     setStatus(`${fileName} を読み込み中`);
     const response = await fetch(`words/${fileName}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const text = await response.text();
+    const text = decodeWordFileBuffer(await response.arrayBuffer());
     loadWordsFromText(text);
   } catch (error) {
     setStatus(`words/${fileName} を読み込めませんでした`);
@@ -1011,10 +1098,18 @@ async function autoLoadDefaultWords() {
   try {
     const response = await fetch("words/JH001.txt", { cache: "no-store" });
     if (!response.ok) return;
-    const text = await response.text();
+    const text = decodeWordFileBuffer(await response.arrayBuffer());
     loadWordsFromText(text);
   } catch (error) {
     setStatus("録音待機中");
+  }
+}
+
+function decodeWordFileBuffer(buffer) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch (error) {
+    return new TextDecoder("shift_jis").decode(buffer);
   }
 }
 
@@ -1029,9 +1124,9 @@ function loadWordsFromText(text) {
     return;
   }
   state.words = parsed;
-  state.index = 0;
+  state.index = -1;
   clearRecording();
-  setStatus(`${parsed.length}語を読み込みました`);
+  setStatus(`${parsed.length}語を読み込みました。右矢印で開始`);
   render();
 }
 
