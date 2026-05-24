@@ -96,6 +96,7 @@ progress {
 
 .practice-panel,
 .wave-panel,
+.spectrum-panel,
 .tools-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -129,6 +130,10 @@ progress {
   font-size: clamp(2.5rem, 14vw, 5.4rem);
   line-height: 0.95;
   font-weight: 800;
+}
+
+.focus-letter {
+  color: #c5362f;
 }
 
 .meaning {
@@ -191,6 +196,11 @@ button:disabled {
   color: #fff;
 }
 
+.main-button.recording {
+  animation: recordingPulse 0.8s ease-in-out infinite alternate;
+  background: #8ca4a6;
+}
+
 .record-button {
   background: var(--warn);
   color: #fff;
@@ -198,6 +208,16 @@ button:disabled {
 
 .record-button.recording {
   background: #9f2f2f;
+}
+
+@keyframes recordingPulse {
+  from {
+    opacity: 0.42;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .score-grid {
@@ -228,6 +248,7 @@ button:disabled {
 }
 
 .wave-panel,
+.spectrum-panel,
 .tools-panel {
   margin-top: 14px;
   padding: 18px;
@@ -259,6 +280,17 @@ canvas {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfd;
+}
+
+#spectrumCanvas {
+  height: 190px;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 12px;
 }
 
 details + details {
@@ -295,7 +327,17 @@ textarea {
   padding: 10px;
 }
 
+select {
+  min-height: 46px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #fff;
+}
+
 #loadPasteButton,
+#loadHostedButton,
 #recognitionButton {
   background: #26343d;
   color: #fff;
@@ -327,8 +369,11 @@ textarea {
   .score-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-}
 
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
     </style>
   </head>
@@ -363,7 +408,7 @@ textarea {
         <div class="controls" aria-label="練習操作">
           <button class="icon-button" id="prevButton" type="button" title="前の単語">←</button>
           <button class="main-button" id="speakButton" type="button">モデル音声</button>
-          <button class="record-button" id="recordButton" type="button">録音開始</button>
+          <button class="record-button" id="recordButton" type="button">もう一度録音</button>
           <button class="main-button" id="playMineButton" type="button" disabled>自分を再生</button>
           <button class="icon-button" id="nextButton" type="button" title="次の単語">→</button>
         </div>
@@ -405,12 +450,51 @@ textarea {
         </div>
       </section>
 
+      <section class="spectrum-panel" aria-label="スペクトラム分析">
+        <div class="wave-header">
+          <h2>スペクトラム分析</h2>
+          <span id="analysisLatency">未解析</span>
+        </div>
+        <canvas id="spectrumCanvas" width="900" height="260"></canvas>
+        <div class="feature-grid">
+          <div class="score-tile">
+            <span class="label">母音帯域</span>
+            <strong id="vowelFeature">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">/r/候補</span>
+            <strong id="rFeature">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">/th/高域</span>
+            <strong id="thFeature">--</strong>
+          </div>
+        </div>
+      </section>
+
       <section class="tools-panel">
         <details>
           <summary>単語リストを読み込む</summary>
           <div class="import-grid">
+            <select id="hostedWordSelect" aria-label="公開済み単語ファイル">
+              <option value="JH001.txt">JH001.txt</option>
+              <option value="JH101.txt">JH101.txt</option>
+              <option value="JH201.txt">JH201.txt</option>
+              <option value="JH301.txt">JH301.txt</option>
+              <option value="JH401.txt">JH401.txt</option>
+              <option value="JH501.txt">JH501.txt</option>
+              <option value="JH601.txt">JH601.txt</option>
+              <option value="JH701.txt">JH701.txt</option>
+              <option value="JH801.txt">JH801.txt</option>
+              <option value="JH901.txt">JH901.txt</option>
+              <option value="JH1001.txt">JH1001.txt</option>
+              <option value="JH1101.txt">JH1101.txt</option>
+              <option value="JH1201.txt">JH1201.txt</option>
+              <option value="JH1301.txt">JH1301.txt</option>
+            </select>
+            <button id="loadHostedButton" type="button">公開済みリストを読み込む</button>
             <label class="file-box">
-              <span>JH101_001.txt を選択</span>
+              <span>端末内の単語ファイルを選択</span>
               <input id="fileInput" type="file" accept=".txt,text/plain">
             </label>
             <textarea id="wordPaste" placeholder="001#apple#りんご&#10;002#book#本"></textarea>
@@ -444,12 +528,14 @@ const fallbackWordsText = `001#apple#りんご
 
 const state = {
   words: parseWordText(fallbackWordsText),
-  index: 0,
+  index: -1,
+  micStream: null,
   mediaRecorder: null,
   recordingChunks: [],
   recordedBlob: null,
   recordedUrl: null,
   audioContext: null,
+  vad: null,
   recordingStartedAt: 0,
   lastMetrics: null,
 };
@@ -470,12 +556,19 @@ const els = {
   playMineButton: document.querySelector("#playMineButton"),
   modelCanvas: document.querySelector("#modelCanvas"),
   userCanvas: document.querySelector("#userCanvas"),
+  spectrumCanvas: document.querySelector("#spectrumCanvas"),
   recordingStatus: document.querySelector("#recordingStatus"),
+  analysisLatency: document.querySelector("#analysisLatency"),
   overallScore: document.querySelector("#overallScore"),
   durationScore: document.querySelector("#durationScore"),
   volumeScore: document.querySelector("#volumeScore"),
   focusScore: document.querySelector("#focusScore"),
+  vowelFeature: document.querySelector("#vowelFeature"),
+  rFeature: document.querySelector("#rFeature"),
+  thFeature: document.querySelector("#thFeature"),
   fileInput: document.querySelector("#fileInput"),
+  hostedWordSelect: document.querySelector("#hostedWordSelect"),
+  loadHostedButton: document.querySelector("#loadHostedButton"),
   wordPaste: document.querySelector("#wordPaste"),
   loadPasteButton: document.querySelector("#loadPasteButton"),
   recognitionButton: document.querySelector("#recognitionButton"),
@@ -483,13 +576,16 @@ const els = {
 };
 
 render();
+autoLoadDefaultWords();
+requestMicrophoneAccess();
 
 els.prevButton.addEventListener("click", () => moveWord(-1));
-els.nextButton.addEventListener("click", () => moveWord(1));
-els.speakButton.addEventListener("click", speakCurrentWord);
-els.recordButton.addEventListener("click", toggleRecording);
+els.nextButton.addEventListener("click", nextPractice);
+els.speakButton.addEventListener("click", () => speakCurrentWord({ recordAfter: false }));
+els.recordButton.addEventListener("click", retryRecording);
 els.playMineButton.addEventListener("click", playRecording);
 els.fileInput.addEventListener("change", loadSelectedFile);
+els.loadHostedButton.addEventListener("click", loadHostedWords);
 els.loadPasteButton.addEventListener("click", loadPastedWords);
 els.recognitionButton.addEventListener("click", runRecognitionCheck);
 
@@ -511,30 +607,34 @@ function parseWordText(text) {
 
 function render() {
   const word = currentWord();
-  els.progressText.textContent = `${state.index + 1} / ${state.words.length}`;
+  const currentNumber = state.index < 0 ? 0 : state.index + 1;
+  els.progressText.textContent = `${currentNumber} / ${state.words.length}`;
   els.progressBar.max = state.words.length;
-  els.progressBar.value = state.index + 1;
-  els.wordNumber.textContent = word.id;
-  els.wordText.textContent = word.spelling;
-  els.meaningText.textContent = word.meaning || "意味なし";
-  els.prevButton.disabled = state.index === 0;
+  els.progressBar.value = currentNumber;
+  els.wordNumber.textContent = word?.id || "---";
+  els.wordText.innerHTML = word ? renderFocusedSpelling(word.spelling) : "▶";
+  els.meaningText.textContent = word ? (word.meaning || "意味なし") : "右矢印で最初の単語を開始";
+  els.prevButton.disabled = state.index <= 0;
   els.nextButton.disabled = state.index === state.words.length - 1;
   els.playMineButton.disabled = !state.recordedBlob;
+  els.recordButton.disabled = state.index < 0;
 
-  const focus = getFocusSounds(word.spelling);
+  const focus = word ? getFocusSounds(word.spelling) : { ae: false, th: false, r: false };
   setChip(els.aeChip, focus.ae);
   setChip(els.thChip, focus.th);
   setChip(els.rChip, focus.r);
 
-  drawModelWave(word.spelling);
+  if (word) drawModelWave(word.spelling);
+  else clearCanvas(els.modelCanvas, "右矢印で開始します");
   if (!state.recordedBlob) {
     clearCanvas(els.userCanvas, "録音するとここに波形が表示されます");
+    clearCanvas(els.spectrumCanvas, "録音後にスペクトログラムを表示します");
     resetScores();
   }
 }
 
 function currentWord() {
-  return state.words[state.index];
+  return state.index >= 0 ? state.words[state.index] : null;
 }
 
 function setChip(element, active) {
@@ -547,8 +647,24 @@ function moveWord(delta) {
   render();
 }
 
-function speakCurrentWord() {
-  const word = currentWord().spelling;
+function nextPractice() {
+  if (state.index < state.words.length - 1) {
+    state.index += 1;
+    clearRecording();
+    render();
+    speakCurrentWord({ recordAfter: true });
+  }
+}
+
+function retryRecording() {
+  if (state.index < 0) return;
+  startRecording({ autoStop: true, source: "manual" });
+}
+
+function speakCurrentWord({ recordAfter }) {
+  const current = currentWord();
+  if (!current) return;
+  const word = current.spelling;
   if (!("speechSynthesis" in window)) {
     setStatus("このブラウザは読み上げに対応していません");
     return;
@@ -560,13 +676,20 @@ function speakCurrentWord() {
   utterance.rate = 0.82;
   utterance.pitch = 1;
   utterance.onstart = () => setStatus("モデル音声を再生中");
-  utterance.onend = () => setStatus("録音待機中");
+  utterance.onend = () => {
+    if (recordAfter) {
+      setStatus("0.1秒後に録音を開始します");
+      window.setTimeout(() => startRecording({ autoStop: true, source: "model" }), 100);
+    } else {
+      setStatus("聞き比べできます");
+    }
+  };
   window.speechSynthesis.speak(utterance);
 }
 
-async function toggleRecording() {
+async function startRecording({ autoStop, source }) {
   if (state.mediaRecorder?.state === "recording") {
-    state.mediaRecorder.stop();
+    stopRecording();
     return;
   }
 
@@ -577,7 +700,9 @@ async function toggleRecording() {
 
   try {
     clearRecording();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const audioContext = getAudioContext();
+    if (audioContext.state === "suspended") await audioContext.resume();
+    const stream = await ensureMicrophoneStream();
     const mimeType = pickMimeType();
     state.mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     state.recordingChunks = [];
@@ -588,24 +713,116 @@ async function toggleRecording() {
     });
 
     state.mediaRecorder.addEventListener("stop", async () => {
-      stream.getTracks().forEach((track) => track.stop());
+      stopVad();
       const type = state.recordingChunks[0]?.type || "audio/webm";
-      state.recordedBlob = new Blob(state.recordingChunks, { type });
-      state.recordedUrl = URL.createObjectURL(state.recordedBlob);
-      els.playMineButton.disabled = false;
-      els.recordButton.textContent = "録音開始";
+      const rawBlob = new Blob(state.recordingChunks, { type });
+      els.recordButton.textContent = "もう一度録音";
       els.recordButton.classList.remove("recording");
+      els.playMineButton.classList.remove("recording");
       setStatus("録音完了");
-      await analyzeRecording();
+      await analyzeRecording(rawBlob);
     });
 
-    state.mediaRecorder.start();
+    state.mediaRecorder.start(100);
     els.recordButton.textContent = "録音停止";
     els.recordButton.classList.add("recording");
-    setStatus("録音中");
+    els.playMineButton.disabled = true;
+    els.playMineButton.classList.add("recording");
+    setStatus(source === "model" ? "復唱してください" : "録音中");
+    if (autoStop) startVad(stream);
   } catch (error) {
     setStatus("マイクの使用が許可されませんでした");
   }
+}
+
+async function requestMicrophoneAccess() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("このブラウザは録音に対応していません");
+    return;
+  }
+
+  try {
+    await ensureMicrophoneStream();
+    setStatus("マイク準備完了。右矢印で開始");
+  } catch (error) {
+    setStatus("マイク許可待ち。右矢印または録音開始で再確認します");
+  }
+}
+
+async function ensureMicrophoneStream() {
+  if (state.micStream?.active) return state.micStream;
+  state.micStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
+  return state.micStream;
+}
+
+function stopRecording() {
+  if (state.mediaRecorder?.state === "recording") {
+    state.mediaRecorder.stop();
+  }
+}
+
+function startVad(stream) {
+  stopVad();
+  const audioContext = getAudioContext();
+  const source = audioContext.createMediaStreamSource(stream);
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
+
+  const data = new Float32Array(analyser.fftSize);
+  const threshold = 0.025;
+  const silenceAfterSpeechMs = 200;
+  const maxRecordingMs = 6000;
+  const minSpeechMs = 120;
+  let hasSpeech = false;
+  let speechStartedAt = 0;
+  let silentSince = 0;
+
+  const tick = () => {
+    if (state.mediaRecorder?.state !== "recording") return;
+    analyser.getFloatTimeDomainData(data);
+    const rms = getRms(data);
+    const now = performance.now();
+    const isSpeech = rms >= threshold;
+
+    if (isSpeech) {
+      if (!hasSpeech) {
+        hasSpeech = true;
+        speechStartedAt = now;
+        setStatus("発声を検出しました");
+      }
+      silentSince = 0;
+    } else if (hasSpeech && !silentSince) {
+      silentSince = now;
+    }
+
+    const speechLongEnough = hasSpeech && now - speechStartedAt >= minSpeechMs;
+    const silenceLongEnough = silentSince && now - silentSince >= silenceAfterSpeechMs;
+    const timedOut = now - state.recordingStartedAt >= maxRecordingMs;
+
+    if ((speechLongEnough && silenceLongEnough) || timedOut) {
+      stopRecording();
+      return;
+    }
+
+    state.vad.frameId = requestAnimationFrame(tick);
+  };
+
+  state.vad = { frameId: requestAnimationFrame(tick), source, analyser };
+}
+
+function stopVad() {
+  if (!state.vad) return;
+  cancelAnimationFrame(state.vad.frameId);
+  state.vad.source.disconnect();
+  state.vad.analyser.disconnect();
+  state.vad = null;
 }
 
 function pickMimeType() {
@@ -624,15 +841,27 @@ function playRecording() {
   audio.play();
 }
 
-async function analyzeRecording() {
-  const buffer = await state.recordedBlob.arrayBuffer();
+async function analyzeRecording(rawBlob) {
+  const analysisStartedAt = performance.now();
+  const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
-  const audioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
+  const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
+  const audioBuffer = trimSpeechBuffer(rawAudioBuffer, {
+    leadingThreshold: 0.018,
+    trailingSecondsToCut: 0.2,
+    leadingPrerollSeconds: 0.03,
+  });
   const samples = audioBuffer.getChannelData(0);
   const envelope = createEnvelope(samples, 160);
-  const metrics = getRecordingMetrics(samples, audioBuffer.duration);
+  const metrics = getRecordingMetrics(samples, audioBuffer.duration, envelope);
+  const spectral = analyzeSpectrum(samples, audioBuffer.sampleRate);
   state.lastMetrics = metrics;
+  state.recordedBlob = encodeWav(audioBuffer);
+  state.recordedUrl = URL.createObjectURL(state.recordedBlob);
+  els.playMineButton.disabled = false;
   drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
+  drawSpectrogram(els.spectrumCanvas, spectral);
+  renderSpectralFeatures(spectral, performance.now() - analysisStartedAt);
   renderScores(metrics);
 }
 
@@ -659,12 +888,34 @@ function createEnvelope(samples, bucketCount) {
   return normalize(envelope);
 }
 
+function trimSpeechBuffer(audioBuffer, options) {
+  const sampleRate = audioBuffer.sampleRate;
+  const source = audioBuffer.getChannelData(0);
+  const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
+  let speechStart = 0;
+
+  for (let index = 0; index < source.length; index += windowSize) {
+    const end = Math.min(source.length, index + windowSize);
+    if (getRms(source.subarray(index, end)) >= options.leadingThreshold) {
+      speechStart = Math.max(0, index - Math.round(options.leadingPrerollSeconds * sampleRate));
+      break;
+    }
+  }
+
+  const cutSamples = Math.round(options.trailingSecondsToCut * sampleRate);
+  const speechEnd = Math.max(speechStart + 1, source.length - cutSamples);
+  const targetLength = Math.max(1, speechEnd - speechStart);
+  const trimmed = getAudioContext().createBuffer(1, targetLength, sampleRate);
+  trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
+  return trimmed;
+}
+
 function normalize(values) {
   const max = Math.max(...values, 0.001);
   return values.map((value) => value / max);
 }
 
-function getRecordingMetrics(samples, duration) {
+function getRecordingMetrics(samples, duration, envelope) {
   let sumSquares = 0;
   let peak = 0;
   for (const sample of samples) {
@@ -676,7 +927,7 @@ function getRecordingMetrics(samples, duration) {
   const expected = expectedDuration(currentWord().spelling);
   const durationScore = clamp(100 - Math.abs(duration - expected) * 35, 20, 100);
   const volumeScore = clamp((rms / 0.09) * 100, 15, 100);
-  const focusScore = estimateFocusScore(currentWord().spelling, duration, peak);
+  const focusScore = estimateFocusScore(currentWord().spelling, envelope, peak);
   const overall = Math.round(durationScore * 0.38 + volumeScore * 0.32 + focusScore * 0.3);
   return {
     duration,
@@ -695,13 +946,23 @@ function expectedDuration(word) {
   return clamp(0.5 + letters * 0.085, 0.75, 1.9);
 }
 
-function estimateFocusScore(word, duration, peak) {
-  const focus = getFocusSounds(word);
-  const count = Number(focus.ae) + Number(focus.th) + Number(focus.r);
-  if (count === 0) return 88;
-  const enoughLength = duration > expectedDuration(word) * 0.75 ? 100 : 65;
-  const enoughSound = peak > 0.08 ? 100 : 72;
-  return (enoughLength + enoughSound) / 2 - (3 - count) * 2;
+function estimateFocusScore(word, envelope, peak) {
+  const matches = getFocusMatches(word);
+  if (!matches.length) return 88;
+  const averageEnergy = envelope.reduce((sum, value) => sum + value, 0) / envelope.length;
+  const scores = matches.map((match) => {
+    const center = ((match.start + match.end) / 2) / Math.max(1, word.length);
+    const halfWindow = match.kind === "th" ? 0.08 : 0.06;
+    const from = Math.max(0, Math.floor((center - halfWindow) * envelope.length));
+    const to = Math.min(envelope.length, Math.ceil((center + halfWindow) * envelope.length));
+    const local = envelope.slice(from, to);
+    const localEnergy = local.reduce((sum, value) => sum + value, 0) / Math.max(1, local.length);
+    const relativeEnergy = localEnergy / Math.max(averageEnergy, 0.05);
+    const energyScore = clamp(relativeEnergy * 74, 35, 100);
+    const peakScore = peak > 0.08 ? 100 : 72;
+    return energyScore * 0.7 + peakScore * 0.3;
+  });
+  return scores.reduce((sum, score) => sum + score, 0) / scores.length;
 }
 
 function renderScores(metrics) {
@@ -717,15 +978,68 @@ function resetScores() {
   els.durationScore.textContent = "--";
   els.volumeScore.textContent = "--";
   els.focusScore.textContent = "--";
+  els.vowelFeature.textContent = "--";
+  els.rFeature.textContent = "--";
+  els.thFeature.textContent = "--";
+  els.analysisLatency.textContent = "未解析";
 }
 
 function getFocusSounds(word) {
-  const normalized = word.toLowerCase();
+  const matches = getFocusMatches(word);
   return {
-    ae: /a/.test(normalized) && !/(ar|air|aw|ay|all)/.test(normalized),
-    th: /th/.test(normalized),
-    r: /r/.test(normalized),
+    ae: matches.some((match) => match.kind === "ae"),
+    th: matches.some((match) => match.kind === "th"),
+    r: matches.some((match) => match.kind === "r"),
   };
+}
+
+function getFocusMatches(word) {
+  const normalized = word.toLowerCase();
+  const matches = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const pair = normalized.slice(index, index + 2);
+    if (pair === "th") {
+      matches.push({ start: index, end: index + 2, kind: "th" });
+      index += 1;
+      continue;
+    }
+
+    const char = normalized[index];
+    const nextTwo = normalized.slice(index, index + 2);
+    const nextThree = normalized.slice(index, index + 3);
+    if (char === "a" && !["ar", "ai", "ay", "aw", "au"].includes(nextTwo) && nextThree !== "all") {
+      matches.push({ start: index, end: index + 1, kind: "ae" });
+    }
+    if (char === "r") {
+      matches.push({ start: index, end: index + 1, kind: "r" });
+    }
+  }
+  return matches;
+}
+
+function renderFocusedSpelling(word) {
+  const matches = getFocusMatches(word);
+  if (!matches.length) return escapeHtml(word);
+  let html = "";
+  let cursor = 0;
+  for (const match of matches) {
+    if (match.start < cursor) continue;
+    html += escapeHtml(word.slice(cursor, match.start));
+    html += `<span class="focus-letter focus-${match.kind}">${escapeHtml(word.slice(match.start, match.end))}</span>`;
+    cursor = match.end;
+  }
+  html += escapeHtml(word.slice(cursor));
+  return html;
+}
+
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  }[char]));
 }
 
 function drawModelWave(word) {
@@ -786,6 +1100,130 @@ function drawGrid(context, width, height) {
   }
 }
 
+function analyzeSpectrum(samples, sampleRate) {
+  const fftSize = 1024;
+  const hopSize = 256;
+  const maxFrequency = Math.min(8000, sampleRate / 2);
+  const maxBin = Math.floor((maxFrequency / sampleRate) * fftSize);
+  const window = createHannWindow(fftSize);
+  const frames = [];
+
+  for (let start = 0; start + fftSize <= samples.length; start += hopSize) {
+    const real = new Float32Array(fftSize);
+    const imag = new Float32Array(fftSize);
+    for (let i = 0; i < fftSize; i += 1) {
+      real[i] = samples[start + i] * window[i];
+    }
+    fft(real, imag);
+    const magnitudes = new Float32Array(maxBin);
+    for (let bin = 1; bin < maxBin; bin += 1) {
+      magnitudes[bin] = Math.sqrt(real[bin] * real[bin] + imag[bin] * imag[bin]);
+    }
+    frames.push(magnitudes);
+  }
+
+  const safeFrames = frames.length ? frames : [new Float32Array(maxBin)];
+  return {
+    frames: safeFrames,
+    sampleRate,
+    fftSize,
+    maxFrequency,
+    vowel: bandEnergy(safeFrames, sampleRate, fftSize, 500, 2500),
+    rBand: bandEnergy(safeFrames, sampleRate, fftSize, 1200, 3000),
+    thBand: bandEnergy(safeFrames, sampleRate, fftSize, 4000, 8000),
+  };
+}
+
+function createHannWindow(size) {
+  return Array.from({ length: size }, (_, index) => {
+    return 0.5 * (1 - Math.cos((2 * Math.PI * index) / (size - 1)));
+  });
+}
+
+function fft(real, imag) {
+  const n = real.length;
+  for (let i = 1, j = 0; i < n; i += 1) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [real[i], real[j]] = [real[j], real[i]];
+      [imag[i], imag[j]] = [imag[j], imag[i]];
+    }
+  }
+
+  for (let length = 2; length <= n; length <<= 1) {
+    const angle = (-2 * Math.PI) / length;
+    const wlenReal = Math.cos(angle);
+    const wlenImag = Math.sin(angle);
+    for (let i = 0; i < n; i += length) {
+      let wReal = 1;
+      let wImag = 0;
+      for (let j = 0; j < length / 2; j += 1) {
+        const evenReal = real[i + j];
+        const evenImag = imag[i + j];
+        const oddReal = real[i + j + length / 2] * wReal - imag[i + j + length / 2] * wImag;
+        const oddImag = real[i + j + length / 2] * wImag + imag[i + j + length / 2] * wReal;
+        real[i + j] = evenReal + oddReal;
+        imag[i + j] = evenImag + oddImag;
+        real[i + j + length / 2] = evenReal - oddReal;
+        imag[i + j + length / 2] = evenImag - oddImag;
+        const nextReal = wReal * wlenReal - wImag * wlenImag;
+        wImag = wReal * wlenImag + wImag * wlenReal;
+        wReal = nextReal;
+      }
+    }
+  }
+}
+
+function bandEnergy(frames, sampleRate, fftSize, lowHz, highHz) {
+  const lowBin = Math.max(1, Math.floor((lowHz / sampleRate) * fftSize));
+  const highBin = Math.min(frames[0].length - 1, Math.ceil((highHz / sampleRate) * fftSize));
+  let band = 0;
+  let total = 0;
+  for (const frame of frames) {
+    for (let bin = 1; bin < frame.length; bin += 1) {
+      const value = frame[bin] * frame[bin];
+      total += value;
+      if (bin >= lowBin && bin <= highBin) band += value;
+    }
+  }
+  return total ? band / total : 0;
+}
+
+function drawSpectrogram(canvas, spectral) {
+  const context = canvas.getContext("2d");
+  const { width, height } = canvas;
+  const image = context.createImageData(width, height);
+  const frames = spectral.frames;
+  const maxMagnitude = Math.max(
+    ...frames.map((frame) => Math.max(...frame)),
+    0.0001,
+  );
+
+  for (let x = 0; x < width; x += 1) {
+    const frame = frames[Math.floor((x / width) * frames.length)];
+    for (let y = 0; y < height; y += 1) {
+      const bin = Math.floor(((height - 1 - y) / height) * frame.length);
+      const value = Math.log1p(frame[bin] * 40) / Math.log1p(maxMagnitude * 40);
+      const offset = (y * width + x) * 4;
+      image.data[offset] = Math.round(15 + value * 220);
+      image.data[offset + 1] = Math.round(32 + value * 135);
+      image.data[offset + 2] = Math.round(38 + value * 70);
+      image.data[offset + 3] = 255;
+    }
+  }
+
+  context.putImageData(image, 0, 0);
+}
+
+function renderSpectralFeatures(spectral, elapsedMs) {
+  els.analysisLatency.textContent = `解析 ${Math.round(elapsedMs)}ms`;
+  els.vowelFeature.textContent = Math.round(spectral.vowel * 100);
+  els.rFeature.textContent = Math.round(spectral.rBand * 100);
+  els.thFeature.textContent = Math.round(spectral.thBand * 100);
+}
+
 function clearCanvas(canvas, text) {
   const context = canvas.getContext("2d");
   const { width, height } = canvas;
@@ -797,12 +1235,14 @@ function clearCanvas(canvas, text) {
 }
 
 function clearRecording() {
+  stopVad();
   if (state.recordedUrl) URL.revokeObjectURL(state.recordedUrl);
   state.recordedBlob = null;
   state.recordedUrl = null;
   state.recordingChunks = [];
   state.lastMetrics = null;
   els.playMineButton.disabled = true;
+  els.playMineButton.classList.remove("recording");
 }
 
 function setStatus(text) {
@@ -812,8 +1252,41 @@ function setStatus(text) {
 async function loadSelectedFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  const text = await file.text();
+  const text = decodeWordFileBuffer(await file.arrayBuffer());
   loadWordsFromText(text);
+  event.target.value = "";
+}
+
+async function loadHostedWords() {
+  const fileName = els.hostedWordSelect.value;
+  try {
+    setStatus(`${fileName} を読み込み中`);
+    const response = await fetch(`words/${fileName}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = decodeWordFileBuffer(await response.arrayBuffer());
+    loadWordsFromText(text);
+  } catch (error) {
+    setStatus(`words/${fileName} を読み込めませんでした`);
+  }
+}
+
+async function autoLoadDefaultWords() {
+  try {
+    const response = await fetch("words/JH001.txt", { cache: "no-store" });
+    if (!response.ok) return;
+    const text = decodeWordFileBuffer(await response.arrayBuffer());
+    loadWordsFromText(text);
+  } catch (error) {
+    setStatus("録音待機中");
+  }
+}
+
+function decodeWordFileBuffer(buffer) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch (error) {
+    return new TextDecoder("shift_jis").decode(buffer);
+  }
 }
 
 function loadPastedWords() {
@@ -827,9 +1300,9 @@ function loadWordsFromText(text) {
     return;
   }
   state.words = parsed;
-  state.index = 0;
+  state.index = -1;
   clearRecording();
-  setStatus(`${parsed.length}語を読み込みました`);
+  setStatus(`${parsed.length}語を読み込みました。右矢印で開始`);
   render();
 }
 
@@ -865,6 +1338,50 @@ function runRecognitionCheck() {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getRms(samples) {
+  let sumSquares = 0;
+  for (const sample of samples) sumSquares += sample * sample;
+  return Math.sqrt(sumSquares / samples.length);
+}
+
+function encodeWav(audioBuffer) {
+  const samples = audioBuffer.getChannelData(0);
+  const sampleRate = audioBuffer.sampleRate;
+  const bytesPerSample = 2;
+  const blockAlign = bytesPerSample;
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, samples.length * bytesPerSample, true);
+
+  let offset = 44;
+  for (const sample of samples) {
+    const clipped = clamp(sample, -1, 1);
+    view.setInt16(offset, clipped < 0 ? clipped * 0x8000 : clipped * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeString(view, offset, value) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
 }
 
     </script>
