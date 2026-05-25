@@ -376,6 +376,13 @@ select {
   text-align: left;
 }
 
+.review-word-button {
+  min-width: 72px;
+  min-height: 38px;
+  background: var(--accent);
+  color: #fff;
+}
+
 .review-row strong {
   font-size: 1.25rem;
 }
@@ -474,11 +481,11 @@ select {
         </div>
         <div class="wave-stack">
           <div>
-            <div class="wave-label">モデル録音</div>
+            <div class="wave-label">モデル録音 <span id="modelDurationText">-- ms</span></div>
             <canvas id="modelCanvas" width="900" height="180"></canvas>
           </div>
           <div>
-            <div class="wave-label">あなたの録音</div>
+            <div class="wave-label">あなたの録音 <span id="userDurationText">-- ms</span></div>
             <canvas id="userCanvas" width="900" height="180"></canvas>
           </div>
         </div>
@@ -562,7 +569,6 @@ select {
       <section class="review-panel" id="reviewView" hidden>
         <div class="wave-header">
           <h2>レビュー</h2>
-          <button class="main-button" id="backToPracticeButton" type="button">学習へ戻る</button>
         </div>
         <div class="review-list" id="reviewList"></div>
       </section>
@@ -622,7 +628,6 @@ const els = {
   rChip: document.querySelector("#rChip"),
   nextWordButton: document.querySelector("#nextWordButton"),
   reviewButton: document.querySelector("#reviewButton"),
-  backToPracticeButton: document.querySelector("#backToPracticeButton"),
   reviewList: document.querySelector("#reviewList"),
   speakButton: document.querySelector("#speakButton"),
   recordButton: document.querySelector("#recordButton"),
@@ -632,6 +637,8 @@ const els = {
   modelSpectrumCanvas: document.querySelector("#modelSpectrumCanvas"),
   spectrumCanvas: document.querySelector("#spectrumCanvas"),
   recordingStatus: document.querySelector("#recordingStatus"),
+  modelDurationText: document.querySelector("#modelDurationText"),
+  userDurationText: document.querySelector("#userDurationText"),
   analysisLatency: document.querySelector("#analysisLatency"),
   overallScore: document.querySelector("#overallScore"),
   vowelScore: document.querySelector("#vowelScore"),
@@ -656,7 +663,6 @@ bootstrap();
 
 els.nextWordButton.addEventListener("click", nextPractice);
 els.reviewButton.addEventListener("click", showReview);
-els.backToPracticeButton.addEventListener("click", showPractice);
 els.speakButton.addEventListener("click", playModelAudio);
 els.recordButton.addEventListener("click", retryRecording);
 els.playMineButton.addEventListener("click", playRecording);
@@ -973,13 +979,10 @@ function startVad(stream) {
   source.connect(analyser);
 
   const data = new Float32Array(analyser.fftSize);
-  const calibrationMs = 300;
-  const thresholdFloor = 0.025;
+  const threshold = 0.025;
   const silenceAfterSpeechMs = 200;
   const maxRecordingMs = 6000;
   const minSpeechMs = 120;
-  const noiseSamples = [];
-  let threshold = thresholdFloor;
   let hasSpeech = false;
   let speechStartedAt = 0;
   let silentSince = 0;
@@ -990,14 +993,6 @@ function startVad(stream) {
     const rms = getRms(data);
     const now = performance.now();
     const elapsed = now - state.recordingStartedAt;
-
-    if (elapsed < calibrationMs) {
-      noiseSamples.push(rms);
-      threshold = Math.max(thresholdFloor, median(noiseSamples) * 4);
-      state.vad.frameId = requestAnimationFrame(tick);
-      return;
-    }
-
     const isSpeech = rms >= threshold;
 
     if (isSpeech) {
@@ -1047,11 +1042,7 @@ async function analyzeRecording(rawBlob, target) {
   const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
   const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
-  const audioBuffer = trimSpeechBuffer(rawAudioBuffer, {
-    thresholdFloor: 0.018,
-    leadingPrerollSeconds: 0.03,
-    trailingHoldSeconds: 0.02,
-  });
+  const audioBuffer = target === "user" ? trimUserSpeechBuffer(rawAudioBuffer) : trimModelSpeechBuffer(rawAudioBuffer);
   const samples = audioBuffer.getChannelData(0);
   const envelope = createEnvelope(samples, 160);
   const spectral = analyzeSpectrum(samples, audioBuffer.sampleRate);
@@ -1064,6 +1055,7 @@ async function analyzeRecording(rawBlob, target) {
     state.modelUrl = URL.createObjectURL(state.modelBlob);
     drawEnvelope(els.modelCanvas, envelope, "#157f7f");
     drawSpectrogram(els.modelSpectrumCanvas, spectral);
+    els.modelDurationText.textContent = `${Math.round(audioBuffer.duration * 1000)} ms`;
   } else {
     state.userAnalysis = analysis;
     state.recordedBlob = encodeWav(audioBuffer);
@@ -1072,6 +1064,7 @@ async function analyzeRecording(rawBlob, target) {
     els.playMineButton.disabled = false;
     drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
     drawSpectrogram(els.spectrumCanvas, spectral);
+    els.userDurationText.textContent = `${Math.round(audioBuffer.duration * 1000)} ms`;
     renderScores(performance.now() - analysisStartedAt);
   }
 }
@@ -1130,6 +1123,8 @@ function saveAttempt() {
     modelUrl: state.modelUrl,
     modelAnalysis: state.modelAnalysis,
     userAnalysis: state.userAnalysis,
+    modelDurationText: els.modelDurationText.textContent,
+    userDurationText: els.userDurationText.textContent,
   });
   render();
 }
@@ -1152,14 +1147,15 @@ function renderReviewList() {
     .sort((a, b) => a[0] - b[0])
     .map(([index, attempt]) => {
       const word = state.words[index];
-      return `<button class="review-row" type="button" data-index="${index}">
-        <span>${escapeHtml(word.id)} ${escapeHtml(word.displaySpelling)}</span>
+      return `<div class="review-row">
+        <button class="review-word-button" type="button" data-index="${index}">${escapeHtml(word.id)}</button>
+        <span>${escapeHtml(word.displaySpelling)}</span>
         <strong>${attempt.overall}</strong>
-      </button>`;
+      </div>`;
     })
     .join("");
   els.reviewList.innerHTML = rows || `<p class="empty-review">まだ実施済みの単語がありません。</p>`;
-  els.reviewList.querySelectorAll(".review-row").forEach((button) => {
+  els.reviewList.querySelectorAll(".review-word-button").forEach((button) => {
     button.addEventListener("click", () => jumpToReviewedWord(Number(button.dataset.index)));
   });
 }
@@ -1179,6 +1175,8 @@ function restoreAttempt(index) {
   state.modelUrl = attempt.modelUrl;
   state.modelAnalysis = attempt.modelAnalysis;
   state.userAnalysis = attempt.userAnalysis;
+  els.modelDurationText.textContent = attempt.modelDurationText || "-- ms";
+  els.userDurationText.textContent = attempt.userDurationText || "-- ms";
   els.playMineButton.disabled = false;
   drawEnvelope(els.modelCanvas, attempt.modelAnalysis.envelope, "#157f7f");
   drawEnvelope(els.userCanvas, attempt.userAnalysis.envelope, "#bd5a2a");
@@ -1208,20 +1206,41 @@ function createEnvelope(samples, bucketCount) {
   return normalize(envelope);
 }
 
-function trimSpeechBuffer(audioBuffer, options) {
+function trimUserSpeechBuffer(audioBuffer) {
+  const sampleRate = audioBuffer.sampleRate;
+  const source = audioBuffer.getChannelData(0);
+  const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
+  const threshold = 0.018;
+  let speechStart = 0;
+
+  for (let index = 0; index < source.length; index += windowSize) {
+    const end = Math.min(source.length, index + windowSize);
+    if (getRms(source.subarray(index, end)) >= threshold) {
+      speechStart = Math.max(0, index - Math.round(0.03 * sampleRate));
+      break;
+    }
+  }
+
+  const speechEnd = Math.max(speechStart + 1, source.length - Math.round(0.2 * sampleRate));
+  const trimmed = getAudioContext().createBuffer(1, Math.max(1, speechEnd - speechStart), sampleRate);
+  trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
+  return trimmed;
+}
+
+function trimModelSpeechBuffer(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
   const source = audioBuffer.getChannelData(0);
   const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
   const noiseWindowSamples = Math.min(source.length, Math.round(sampleRate * 0.18));
   const noiseRms = getRms(source.subarray(0, noiseWindowSamples));
-  const threshold = Math.max(options.thresholdFloor, noiseRms * 4);
+  const threshold = Math.max(0.018, noiseRms * 4);
   let speechStart = 0;
   let speechEnd = source.length;
 
   for (let index = 0; index < source.length; index += windowSize) {
     const end = Math.min(source.length, index + windowSize);
     if (getRms(source.subarray(index, end)) >= threshold) {
-      speechStart = Math.max(0, index - Math.round(options.leadingPrerollSeconds * sampleRate));
+      speechStart = Math.max(0, index - Math.round(0.03 * sampleRate));
       break;
     }
   }
@@ -1229,7 +1248,7 @@ function trimSpeechBuffer(audioBuffer, options) {
   for (let index = source.length - windowSize; index >= speechStart; index -= windowSize) {
     const end = Math.min(source.length, index + windowSize);
     if (getRms(source.subarray(index, end)) >= threshold) {
-      speechEnd = Math.min(source.length, end + Math.round(options.trailingHoldSeconds * sampleRate));
+      speechEnd = Math.min(source.length, end + Math.round(0.02 * sampleRate));
       break;
     }
   }
@@ -1471,6 +1490,8 @@ function clearUserAudio(revokeSaved = true) {
   state.recordingChunks = [];
   els.playMineButton.disabled = true;
   els.playMineButton.classList.remove("recording");
+  els.userDurationText.textContent = "-- ms";
+  if (!state.modelUrl) els.modelDurationText.textContent = "-- ms";
 }
 
 function revokeUrl(url) {
@@ -1606,11 +1627,6 @@ function getRms(samples) {
   return Math.sqrt(sumSquares / samples.length);
 }
 
-function median(values) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
 
 function encodeWav(audioBuffer) {
   const samples = audioBuffer.getChannelData(0);
