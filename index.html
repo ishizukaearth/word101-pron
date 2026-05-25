@@ -684,46 +684,68 @@ function setupWordFileOptions() {
 }
 
 function parseWordText(text) {
-  return text
-    .split(/\r?\n/)
+  const normalizedText = text.replace(/^\uFEFF/, "");
+  const lineItems = normalizedText
+    .split(/\r\n|\n|\r/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line, lineIndex) => {
-      const fields = line.split("#");
-      if (fields.at(-1) === "") fields.pop();
-
-      let id;
-      let displaySpelling;
-      let spokenSpelling;
-      let displayMeaning;
-      let spokenMeaning;
-      let phonetic;
-
-      if (fields.length >= 6) {
-        [id, displaySpelling, spokenSpelling, displayMeaning, spokenMeaning, phonetic] = fields;
-      } else {
-        [id, displaySpelling, displayMeaning] = fields;
-        spokenSpelling = displaySpelling;
-        spokenMeaning = displayMeaning;
-        phonetic = "0";
-      }
-
-      id = (id || String(lineIndex + 1)).trim();
-      displaySpelling = (displaySpelling || "").trim();
-      spokenSpelling = (spokenSpelling || displaySpelling).trim();
-      displayMeaning = (displayMeaning || "").trim();
-      spokenMeaning = (spokenMeaning || displayMeaning).trim();
-      phonetic = (phonetic || "0").trim();
-      return {
-        id,
-        displaySpelling,
-        spokenSpelling,
-        displayMeaning,
-        spokenMeaning,
-        phonetic,
-      };
-    })
+    .map(parseWordLine)
     .filter((item) => item.displaySpelling);
+
+  if (lineItems.length > 1) return lineItems;
+
+  const tokens = normalizedText
+    .split("#")
+    .map((field) => field.trim());
+  if (tokens.at(-1) === "") tokens.pop();
+  if (tokens.length >= 12 && tokens.length % 6 === 0) {
+    const chunked = [];
+    for (let index = 0; index < tokens.length; index += 6) {
+      chunked.push(parseWordFields(tokens.slice(index, index + 6), chunked.length));
+    }
+    return chunked.filter((item) => item.displaySpelling);
+  }
+
+  return lineItems;
+}
+
+function parseWordLine(line, lineIndex) {
+  const fields = line.split("#");
+  if (fields.at(-1) === "") fields.pop();
+  return parseWordFields(fields, lineIndex);
+}
+
+function parseWordFields(fields, lineIndex) {
+  let id;
+  let displaySpelling;
+  let spokenSpelling;
+  let displayMeaning;
+  let spokenMeaning;
+  let phonetic;
+
+  if (fields.length >= 6) {
+    [id, displaySpelling, spokenSpelling, displayMeaning, spokenMeaning, phonetic] = fields;
+  } else {
+    [id, displaySpelling, displayMeaning] = fields;
+    spokenSpelling = displaySpelling;
+    spokenMeaning = displayMeaning;
+    phonetic = "0";
+  }
+
+  id = (id || String(lineIndex + 1)).trim();
+  displaySpelling = (displaySpelling || "").trim();
+  spokenSpelling = (spokenSpelling || displaySpelling).trim();
+  displayMeaning = (displayMeaning || "").trim();
+  spokenMeaning = (spokenMeaning || displayMeaning).trim();
+  phonetic = (phonetic || "0").trim();
+  return {
+    id,
+    displaySpelling,
+    spokenSpelling,
+    displayMeaning,
+    spokenMeaning,
+    phonetic,
+  };
 }
 
 function render() {
@@ -803,7 +825,12 @@ async function speakCurrentWord({ recordAfter }) {
     return;
   }
 
-  const modelCapture = recordAfter ? await startModelCapture() : null;
+  const modelCapturePromise = recordAfter
+    ? startModelCapture().catch((error) => {
+      setStatus(`モデル録音なしで再生します: ${error.message}`);
+      return null;
+    })
+    : Promise.resolve(null);
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(current.spokenSpelling);
   utterance.lang = "en-US";
@@ -811,6 +838,7 @@ async function speakCurrentWord({ recordAfter }) {
   utterance.pitch = 1;
   utterance.onstart = () => setStatus("モデル音声を再生中");
   utterance.onend = async () => {
+    const modelCapture = await modelCapturePromise;
     if (modelCapture) {
       const rawModelBlob = await stopModelCapture(modelCapture);
       await analyzeRecording(rawModelBlob, "model");
