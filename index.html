@@ -690,12 +690,31 @@ function parseWordText(text) {
     .filter(Boolean)
     .map((line, lineIndex) => {
       const parts = line.split("#");
-      const id = (parts[1] || parts[0] || String(lineIndex + 1)).trim();
-      const displaySpelling = (parts[2] || "").trim();
-      const spokenSpelling = (parts[3] || displaySpelling).trim();
-      const displayMeaning = (parts[4] || "").trim();
-      const spokenMeaning = (parts[5] || displayMeaning).trim();
-      const phonetic = (parts[6] || "0").trim();
+      const fields = parts[0] === "" ? parts.slice(1) : parts;
+      if (fields.at(-1) === "") fields.pop();
+
+      let id;
+      let displaySpelling;
+      let spokenSpelling;
+      let displayMeaning;
+      let spokenMeaning;
+      let phonetic;
+
+      if (fields.length >= 6) {
+        [id, displaySpelling, spokenSpelling, displayMeaning, spokenMeaning, phonetic] = fields;
+      } else {
+        [id, displaySpelling, displayMeaning] = fields;
+        spokenSpelling = displaySpelling;
+        spokenMeaning = displayMeaning;
+        phonetic = "0";
+      }
+
+      id = (id || String(lineIndex + 1)).trim();
+      displaySpelling = (displaySpelling || "").trim();
+      spokenSpelling = (spokenSpelling || displaySpelling).trim();
+      displayMeaning = (displayMeaning || "").trim();
+      spokenMeaning = (spokenMeaning || displayMeaning).trim();
+      phonetic = (phonetic || "0").trim();
       return {
         id,
         displaySpelling,
@@ -1413,24 +1432,41 @@ function setStatus(text) {
 async function loadSelectedFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  const text = decodeWordFileBuffer(await file.arrayBuffer());
-  loadWordsFromText(text, file.name);
-  event.target.value = "";
+  try {
+    const text = decodeWordFileBuffer(await file.arrayBuffer());
+    loadWordsFromText(text, file.name);
+  } catch (error) {
+    setStatus(`端末内ファイルを読み込めませんでした: ${error.message}`);
+  }
 }
 
 async function loadHostedWords() {
   const fileName = els.hostedWordSelect.value;
   try {
     setStatus(`${fileName} を読み込み中`);
-    const response = await fetch(`words/${fileName}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const response = await fetchWordFile(fileName);
     const text = decodeWordFileBuffer(await response.arrayBuffer());
     loadWordsFromText(text, fileName);
     localStorage.setItem(STORAGE_KEY, fileName);
   } catch (error) {
-    setStatus(`words/${fileName} を読み込めませんでした`);
+    setStatus(`${fileName} を読み込めませんでした: ${error.message}`);
     els.wordListDetails.open = true;
   }
+}
+
+async function fetchWordFile(fileName) {
+  const candidates = [`words/${fileName}`, fileName];
+  const failures = [];
+  for (const path of candidates) {
+    try {
+      const response = await fetch(path, { cache: "no-store" });
+      if (response.ok) return response;
+      failures.push(`${path}: HTTP ${response.status}`);
+    } catch (error) {
+      failures.push(`${path}: ${error.message}`);
+    }
+  }
+  throw new Error(failures.join(" / "));
 }
 
 function decodeWordFileBuffer(buffer) {
