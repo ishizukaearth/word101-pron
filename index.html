@@ -689,8 +689,7 @@ function parseWordText(text) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line, lineIndex) => {
-      const parts = line.split("#");
-      const fields = parts[0] === "" ? parts.slice(1) : parts;
+      const fields = line.split("#");
       if (fields.at(-1) === "") fields.pop();
 
       let id;
