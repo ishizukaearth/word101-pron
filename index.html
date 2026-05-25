@@ -930,17 +930,9 @@ async function startRecording({ autoStop, source }) {
     els.playMineButton.classList.add("recording");
     setStatus(source === "model" ? "復唱してください" : "録音中");
     if (autoStop) startVad(stream);
-    if (autoStop) scheduleUserRecordingStop();
   } catch (error) {
     setStatus("マイクの使用が許可されませんでした");
   }
-}
-
-function scheduleUserRecordingStop() {
-  const durationMs = state.modelDurationMs || 900;
-  window.setTimeout(() => {
-    if (state.mediaRecorder?.state === "recording") stopRecording();
-  }, Math.max(300, durationMs));
 }
 
 async function requestMicrophoneAccess() {
@@ -1015,7 +1007,10 @@ function startVad(stream) {
       silentSince = now;
     }
 
-    if (elapsed >= maxRecordingMs) {
+    const speechLongEnough = hasSpeech && now - speechStartedAt >= minSpeechMs;
+    const silenceLongEnough = silentSince && now - silentSince >= silenceAfterSpeechMs;
+
+    if ((speechLongEnough && silenceLongEnough) || elapsed >= maxRecordingMs) {
       stopRecording();
       return;
     }
