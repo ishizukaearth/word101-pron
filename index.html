@@ -606,6 +606,7 @@ const state = {
   recordedUrl: null,
   modelBlob: null,
   modelUrl: null,
+  modelDurationMs: 0,
   modelAnalysis: null,
   userAnalysis: null,
   attempts: new Map(),
@@ -761,7 +762,7 @@ function render() {
   els.progressBar.max = Math.max(1, state.words.length);
   els.progressBar.value = currentNumber;
   els.wordNumber.textContent = word?.id || "---";
-  els.wordText.textContent = word ? word.displaySpelling : "▶";
+  els.wordText.textContent = word ? word.displaySpelling : "";
   els.meaningText.textContent = word
     ? (word.displayMeaning || "意味なし")
     : state.words.length
@@ -929,9 +930,17 @@ async function startRecording({ autoStop, source }) {
     els.playMineButton.classList.add("recording");
     setStatus(source === "model" ? "復唱してください" : "録音中");
     if (autoStop) startVad(stream);
+    if (autoStop) scheduleUserRecordingStop();
   } catch (error) {
     setStatus("マイクの使用が許可されませんでした");
   }
+}
+
+function scheduleUserRecordingStop() {
+  const durationMs = state.modelDurationMs || 900;
+  window.setTimeout(() => {
+    if (state.mediaRecorder?.state === "recording") stopRecording();
+  }, Math.max(300, durationMs));
 }
 
 async function requestMicrophoneAccess() {
@@ -1006,8 +1015,7 @@ function startVad(stream) {
       silentSince = now;
     }
 
-    if ((hasSpeech && now - speechStartedAt >= minSpeechMs && silentSince && now - silentSince >= silenceAfterSpeechMs)
-      || elapsed >= maxRecordingMs) {
+    if (elapsed >= maxRecordingMs) {
       stopRecording();
       return;
     }
@@ -1053,9 +1061,10 @@ async function analyzeRecording(rawBlob, target) {
     state.modelAnalysis = analysis;
     state.modelBlob = encodeWav(audioBuffer);
     state.modelUrl = URL.createObjectURL(state.modelBlob);
+    state.modelDurationMs = Math.round(audioBuffer.duration * 1000);
     drawEnvelope(els.modelCanvas, envelope, "#157f7f");
     drawSpectrogram(els.modelSpectrumCanvas, spectral);
-    els.modelDurationText.textContent = `${Math.round(audioBuffer.duration * 1000)} ms`;
+    els.modelDurationText.textContent = `${state.modelDurationMs} ms`;
   } else {
     state.userAnalysis = analysis;
     state.recordedBlob = encodeWav(audioBuffer);
@@ -1123,6 +1132,7 @@ function saveAttempt() {
     modelUrl: state.modelUrl,
     modelAnalysis: state.modelAnalysis,
     userAnalysis: state.userAnalysis,
+    modelDurationMs: state.modelDurationMs,
     modelDurationText: els.modelDurationText.textContent,
     userDurationText: els.userDurationText.textContent,
   });
@@ -1173,6 +1183,7 @@ function restoreAttempt(index) {
   clearCurrentAudio({ revokeSaved: false });
   state.recordedUrl = attempt.recordedUrl;
   state.modelUrl = attempt.modelUrl;
+  state.modelDurationMs = attempt.modelDurationMs || 0;
   state.modelAnalysis = attempt.modelAnalysis;
   state.userAnalysis = attempt.userAnalysis;
   els.modelDurationText.textContent = attempt.modelDurationText || "-- ms";
@@ -1477,8 +1488,9 @@ function clearCurrentAudio({ revokeSaved = true } = {}) {
   stopVad();
   clearUserAudio(revokeSaved);
   if (revokeSaved) revokeUrl(state.modelUrl);
-  state.modelBlob = null;
-  state.modelUrl = null;
+    state.modelBlob = null;
+    state.modelUrl = null;
+    state.modelDurationMs = 0;
   state.modelAnalysis = null;
 }
 
