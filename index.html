@@ -973,10 +973,13 @@ function startVad(stream) {
   source.connect(analyser);
 
   const data = new Float32Array(analyser.fftSize);
-  const threshold = 0.025;
+  const calibrationMs = 300;
+  const thresholdFloor = 0.025;
   const silenceAfterSpeechMs = 200;
   const maxRecordingMs = 6000;
   const minSpeechMs = 120;
+  const noiseSamples = [];
+  let threshold = thresholdFloor;
   let hasSpeech = false;
   let speechStartedAt = 0;
   let silentSince = 0;
@@ -986,6 +989,15 @@ function startVad(stream) {
     analyser.getFloatTimeDomainData(data);
     const rms = getRms(data);
     const now = performance.now();
+    const elapsed = now - state.recordingStartedAt;
+
+    if (elapsed < calibrationMs) {
+      noiseSamples.push(rms);
+      threshold = Math.max(thresholdFloor, median(noiseSamples) * 4);
+      state.vad.frameId = requestAnimationFrame(tick);
+      return;
+    }
+
     const isSpeech = rms >= threshold;
 
     if (isSpeech) {
@@ -1000,7 +1012,7 @@ function startVad(stream) {
     }
 
     if ((hasSpeech && now - speechStartedAt >= minSpeechMs && silentSince && now - silentSince >= silenceAfterSpeechMs)
-      || now - state.recordingStartedAt >= maxRecordingMs) {
+      || elapsed >= maxRecordingMs) {
       stopRecording();
       return;
     }
@@ -1036,9 +1048,9 @@ async function analyzeRecording(rawBlob, target) {
   const audioContext = getAudioContext();
   const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
   const audioBuffer = trimSpeechBuffer(rawAudioBuffer, {
-    leadingThreshold: 0.018,
-    trailingSecondsToCut: 0.2,
+    thresholdFloor: 0.018,
     leadingPrerollSeconds: 0.03,
+    trailingHoldSeconds: 0.02,
   });
   const samples = audioBuffer.getChannelData(0);
   const envelope = createEnvelope(samples, 160);
@@ -1200,16 +1212,29 @@ function trimSpeechBuffer(audioBuffer, options) {
   const sampleRate = audioBuffer.sampleRate;
   const source = audioBuffer.getChannelData(0);
   const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
+  const noiseWindowSamples = Math.min(source.length, Math.round(sampleRate * 0.18));
+  const noiseRms = getRms(source.subarray(0, noiseWindowSamples));
+  const threshold = Math.max(options.thresholdFloor, noiseRms * 4);
   let speechStart = 0;
+  let speechEnd = source.length;
+
   for (let index = 0; index < source.length; index += windowSize) {
     const end = Math.min(source.length, index + windowSize);
-    if (getRms(source.subarray(index, end)) >= options.leadingThreshold) {
+    if (getRms(source.subarray(index, end)) >= threshold) {
       speechStart = Math.max(0, index - Math.round(options.leadingPrerollSeconds * sampleRate));
       break;
     }
   }
-  const cutSamples = Math.round(options.trailingSecondsToCut * sampleRate);
-  const speechEnd = Math.max(speechStart + 1, source.length - cutSamples);
+
+  for (let index = source.length - windowSize; index >= speechStart; index -= windowSize) {
+    const end = Math.min(source.length, index + windowSize);
+    if (getRms(source.subarray(index, end)) >= threshold) {
+      speechEnd = Math.min(source.length, end + Math.round(options.trailingHoldSeconds * sampleRate));
+      break;
+    }
+  }
+
+  speechEnd = Math.max(speechStart + 1, speechEnd);
   const trimmed = getAudioContext().createBuffer(1, Math.max(1, speechEnd - speechStart), sampleRate);
   trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
   return trimmed;
@@ -1579,6 +1604,12 @@ function getRms(samples) {
   let sumSquares = 0;
   for (const sample of samples) sumSquares += sample * sample;
   return Math.sqrt(sumSquares / samples.length);
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 function encodeWav(audioBuffer) {
