@@ -5,3 +5,5 @@ JH101の001-100を入れてある
 第3段階は意味➡発音で判定
 Ver4 スペクトラム分析で評価する
 V4ab単語形式の調整
+発音の録音の停止方式の検討
+https://ishizukaearth.github.io/word101-pron/index.html?v=8
