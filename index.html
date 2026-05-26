@@ -536,11 +536,11 @@ select {
         </div>
         <div class="wave-stack">
           <div>
-            <div class="wave-label">モデル録音 <span id="modelDurationText">-- ms</span></div>
+            <div class="wave-label">モデル録音 <span id="modelDurationText">-- ms</span> <span id="modelTrimText">発話区間 ----</span></div>
             <canvas id="modelCanvas" width="900" height="180"></canvas>
           </div>
           <div>
-            <div class="wave-label">あなたの録音 <span id="userDurationText">-- ms</span></div>
+            <div class="wave-label">あなたの録音 <span id="userDurationText">-- ms</span> <span id="userTrimText">発話区間 ----</span></div>
             <canvas id="userCanvas" width="900" height="180"></canvas>
           </div>
         </div>
@@ -713,6 +713,8 @@ const els = {
   recordingStatus: document.querySelector("#recordingStatus"),
   modelDurationText: document.querySelector("#modelDurationText"),
   userDurationText: document.querySelector("#userDurationText"),
+  modelTrimText: document.querySelector("#modelTrimText"),
+  userTrimText: document.querySelector("#userTrimText"),
   analysisLatency: document.querySelector("#analysisLatency"),
   overallScore: document.querySelector("#overallScore"),
   vowelScore: document.querySelector("#vowelScore"),
@@ -1161,6 +1163,7 @@ async function analyzeRecording(rawBlob, target) {
     drawEnvelope(els.modelCanvas, envelope, "#157f7f");
     drawSpectrogram(els.modelSpectrumCanvas, spectral);
     els.modelDurationText.textContent = `${state.modelDurationMs} ms`;
+    els.modelTrimText.textContent = `発話区間 ${trimmed.startMs}-${trimmed.endMs}`;
   } else {
     revokeUrl(state.rawRecordedUrl);
     state.rawRecordedBlob = rawBlob;
@@ -1174,6 +1177,7 @@ async function analyzeRecording(rawBlob, target) {
     drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
     drawSpectrogram(els.spectrumCanvas, spectral);
     els.userDurationText.textContent = `${Math.round(audioBuffer.duration * 1000)} ms`;
+    els.userTrimText.textContent = `発話区間 ${trimmed.startMs}-${trimmed.endMs}`;
     renderScores(performance.now() - analysisStartedAt);
   }
 }
@@ -1241,6 +1245,8 @@ function saveAttempt() {
     modelDurationMs: state.modelDurationMs,
     modelDurationText: els.modelDurationText.textContent,
     userDurationText: els.userDurationText.textContent,
+    modelTrimText: els.modelTrimText.textContent,
+    userTrimText: els.userTrimText.textContent,
   });
   render();
 }
@@ -1354,6 +1360,8 @@ function restoreAttempt(index) {
   state.userAnalysis = attempt.userAnalysis;
   els.modelDurationText.textContent = attempt.modelDurationText || "-- ms";
   els.userDurationText.textContent = attempt.userDurationText || "-- ms";
+  els.modelTrimText.textContent = attempt.modelTrimText || "発話区間 ----";
+  els.userTrimText.textContent = attempt.userTrimText || "発話区間 ----";
   els.playMineButton.disabled = false;
   drawEnvelope(els.modelCanvas, attempt.modelAnalysis.envelope, "#157f7f");
   drawEnvelope(els.userCanvas, attempt.userAnalysis.envelope, "#bd5a2a");
@@ -1703,7 +1711,9 @@ function clearUserAudio(revokeSaved = true) {
   els.playMineButton.disabled = true;
   els.playMineButton.classList.remove("recording");
   els.userDurationText.textContent = "-- ms";
+  els.userTrimText.textContent = "発話区間 ----";
   if (!state.modelUrl) els.modelDurationText.textContent = "-- ms";
+  if (!state.modelUrl) els.modelTrimText.textContent = "発話区間 ----";
 }
 
 function revokeUrl(url) {
