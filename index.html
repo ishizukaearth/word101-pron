@@ -1146,9 +1146,11 @@ async function analyzeRecording(rawBlob, target) {
   const trimmed = target === "user" ? trimUserSpeechBuffer(rawAudioBuffer) : trimModelSpeechBuffer(rawAudioBuffer);
   const audioBuffer = trimmed.audioBuffer;
   const samples = audioBuffer.getChannelData(0);
-  const envelope = createEnvelope(samples, 160);
+  const rmsEnvelope = createRmsEnvelope(samples, 160);
+  const rmsEnvelope10ms = createRmsEnvelopeByWindow(samples, audioBuffer.sampleRate, 10);
+  const envelope = normalize(rmsEnvelope);
   const spectral = analyzeSpectrum(samples, audioBuffer.sampleRate);
-  const analysis = { spectral, envelope };
+  const analysis = { spectral, envelope, rmsEnvelope, rmsEnvelope10ms };
 
   if (target === "model") {
     revokeUrl(state.modelUrl);
@@ -1315,7 +1317,7 @@ async function exportSoundData() {
         trimmedAudio: await blobToDataUrl(await urlToBlob(attempt.modelUrl)),
         trim: attempt.modelTrim,
         durationText: attempt.modelDurationText,
-        waveformPng: drawEnvelopeToDataUrl(attempt.modelAnalysis.envelope, "#157f7f"),
+        waveformPng: drawRmsEnvelopeToDataUrl(attempt.modelAnalysis.rmsEnvelope10ms, "#157f7f"),
         spectrumPng: drawSpectrogramToDataUrl(attempt.modelAnalysis.spectral),
       },
       user: {
@@ -1323,7 +1325,7 @@ async function exportSoundData() {
         trimmedAudio: await blobToDataUrl(await urlToBlob(attempt.recordedUrl)),
         trim: attempt.userTrim,
         durationText: attempt.userDurationText,
-        waveformPng: drawEnvelopeToDataUrl(attempt.userAnalysis.envelope, "#bd5a2a"),
+        waveformPng: drawRmsEnvelopeToDataUrl(attempt.userAnalysis.rmsEnvelope10ms, "#bd5a2a"),
         spectrumPng: drawSpectrogramToDataUrl(attempt.userAnalysis.spectral),
       },
     });
@@ -1389,6 +1391,31 @@ function createEnvelope(samples, bucketCount) {
     envelope.push(sum / Math.max(1, end - start));
   }
   return normalize(envelope);
+}
+
+function createRmsEnvelope(samples, bucketCount) {
+  const bucketSize = Math.max(1, Math.floor(samples.length / bucketCount));
+  const envelope = [];
+  for (let i = 0; i < bucketCount; i += 1) {
+    let sumSquares = 0;
+    const start = i * bucketSize;
+    const end = Math.min(samples.length, start + bucketSize);
+    for (let j = start; j < end; j += 1) sumSquares += samples[j] * samples[j];
+    envelope.push(Math.sqrt(sumSquares / Math.max(1, end - start)));
+  }
+  return envelope;
+}
+
+function createRmsEnvelopeByWindow(samples, sampleRate, windowMs) {
+  const bucketSize = Math.max(1, Math.round((sampleRate * windowMs) / 1000));
+  const envelope = [];
+  for (let start = 0; start < samples.length; start += bucketSize) {
+    let sumSquares = 0;
+    const end = Math.min(samples.length, start + bucketSize);
+    for (let j = start; j < end; j += 1) sumSquares += samples[j] * samples[j];
+    envelope.push(Math.sqrt(sumSquares / Math.max(1, end - start)));
+  }
+  return envelope;
 }
 
 function trimUserSpeechBuffer(audioBuffer) {
@@ -1666,6 +1693,66 @@ function drawEnvelopeToDataUrl(envelope, color) {
   return canvas.toDataURL("image/png");
 }
 
+function drawRmsEnvelopeToDataUrl(envelope, color) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 900;
+  canvas.height = 180;
+  drawRmsEnvelope(canvas, envelope, color);
+  return canvas.toDataURL("image/png");
+}
+
+function drawRmsEnvelope(canvas, envelope, color) {
+  const context = canvas.getContext("2d");
+  const { width, height } = canvas;
+  const maxRms = Math.max(0.05, Math.ceil(Math.max(...envelope, 0.001) * 100) / 100);
+  context.fillStyle = "#fbfcfd";
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = "#e6ebef";
+  context.fillStyle = "#66727c";
+  context.font = "16px system-ui, sans-serif";
+  context.textAlign = "left";
+  for (let mark = 0; mark <= maxRms + 0.0001; mark += 0.01) {
+    const yTop = height / 2 - (mark / maxRms) * (height / 2) * 0.82;
+    const yBottom = height / 2 + (mark / maxRms) * (height / 2) * 0.82;
+    context.beginPath();
+    context.moveTo(44, yTop);
+    context.lineTo(width, yTop);
+    context.moveTo(44, yBottom);
+    context.lineTo(width, yBottom);
+    context.stroke();
+    if (mark > 0) context.fillText(mark.toFixed(2), 4, yTop + 5);
+  }
+  context.strokeStyle = "#cfd7dc";
+  context.beginPath();
+  context.moveTo(44, height / 2);
+  context.lineTo(width, height / 2);
+  context.stroke();
+
+  const center = height / 2;
+  const plotWidth = width - 44;
+  const step = plotWidth / Math.max(1, envelope.length - 1);
+  context.beginPath();
+  envelope.forEach((value, index) => {
+    const x = 44 + index * step;
+    const y = center - (value / maxRms) * center * 0.82;
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  for (let index = envelope.length - 1; index >= 0; index -= 1) {
+    const x = 44 + index * step;
+    const y = center + (envelope[index] / maxRms) * center * 0.82;
+    context.lineTo(x, y);
+  }
+  context.closePath();
+  context.fillStyle = color;
+  context.globalAlpha = 0.22;
+  context.fill();
+  context.globalAlpha = 1;
+  context.strokeStyle = color;
+  context.lineWidth = 2;
+  context.stroke();
+}
+
 function drawSpectrogramToDataUrl(spectral) {
   const canvas = document.createElement("canvas");
   canvas.width = 900;
@@ -1899,7 +1986,9 @@ function writeString(view, offset, value) {
 }
 
 function readStoredNumber(key, fallback) {
-  const value = Number(localStorage.getItem(key));
+  const raw = localStorage.getItem(key);
+  if (raw === null || raw === "") return fallback;
+  const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
 }
 
