@@ -167,6 +167,38 @@ progress {
   color: var(--accent-strong);
 }
 
+.settings-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.setting-box {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.stepper {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.stepper button {
+  min-height: 38px;
+  background: #e7ecef;
+  color: var(--ink);
+}
+
+.stepper strong {
+  text-align: center;
+  font-size: 1.2rem;
+}
+
 .controls {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -417,6 +449,10 @@ select {
   .feature-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+
+  .settings-row {
+    grid-template-columns: 1fr;
+  }
 }
 
     </style>
@@ -449,6 +485,25 @@ select {
           <span class="focus-chip" id="aeChip">/ae/</span>
           <span class="focus-chip" id="thChip">/th/</span>
           <span class="focus-chip" id="rChip">/r/</span>
+        </div>
+
+        <div class="settings-row" aria-label="録音判定設定">
+          <div class="setting-box">
+            <span class="label">X1 RMS閾値</span>
+            <div class="stepper">
+              <button id="x1DownButton" type="button">−</button>
+              <strong id="x1Value">0.018</strong>
+              <button id="x1UpButton" type="button">＋</button>
+            </div>
+          </div>
+          <div class="setting-box">
+            <span class="label">X2 無音区間</span>
+            <div class="stepper">
+              <button id="x2DownButton" type="button">−</button>
+              <strong id="x2Value">0.20秒</strong>
+              <button id="x2UpButton" type="button">＋</button>
+            </div>
+          </div>
         </div>
 
         <div class="controls" aria-label="練習操作">
@@ -569,6 +624,7 @@ select {
       <section class="review-panel" id="reviewView" hidden>
         <div class="wave-header">
           <h2>レビュー</h2>
+          <button class="main-button" id="exportDataButton" type="button">データ書き出し</button>
         </div>
         <div class="review-list" id="reviewList"></div>
       </section>
@@ -593,6 +649,8 @@ const WORD_FILES = [
 ];
 
 const STORAGE_KEY = "jh101-last-word-file";
+const X1_STORAGE_KEY = "jh101-rms-threshold-x1";
+const X2_STORAGE_KEY = "jh101-silence-seconds-x2";
 
 const state = {
   words: [],
@@ -603,16 +661,24 @@ const state = {
   mediaRecorder: null,
   recordingChunks: [],
   recordedBlob: null,
+  rawRecordedBlob: null,
   recordedUrl: null,
+  rawRecordedUrl: null,
   modelBlob: null,
+  rawModelBlob: null,
   modelUrl: null,
+  rawModelUrl: null,
   modelDurationMs: 0,
   modelAnalysis: null,
   userAnalysis: null,
+  modelTrim: null,
+  userTrim: null,
   attempts: new Map(),
   audioContext: null,
   vad: null,
   recordingStartedAt: 0,
+  x1Threshold: readStoredNumber(X1_STORAGE_KEY, 0.018),
+  x2SilenceSeconds: readStoredNumber(X2_STORAGE_KEY, 0.2),
   lastMetrics: null,
 };
 
@@ -627,8 +693,15 @@ const els = {
   aeChip: document.querySelector("#aeChip"),
   thChip: document.querySelector("#thChip"),
   rChip: document.querySelector("#rChip"),
+  x1Value: document.querySelector("#x1Value"),
+  x2Value: document.querySelector("#x2Value"),
+  x1DownButton: document.querySelector("#x1DownButton"),
+  x1UpButton: document.querySelector("#x1UpButton"),
+  x2DownButton: document.querySelector("#x2DownButton"),
+  x2UpButton: document.querySelector("#x2UpButton"),
   nextWordButton: document.querySelector("#nextWordButton"),
   reviewButton: document.querySelector("#reviewButton"),
+  exportDataButton: document.querySelector("#exportDataButton"),
   reviewList: document.querySelector("#reviewList"),
   speakButton: document.querySelector("#speakButton"),
   recordButton: document.querySelector("#recordButton"),
@@ -664,6 +737,11 @@ bootstrap();
 
 els.nextWordButton.addEventListener("click", nextPractice);
 els.reviewButton.addEventListener("click", showReview);
+els.exportDataButton.addEventListener("click", exportSoundData);
+els.x1DownButton.addEventListener("click", () => adjustX1(-0.001));
+els.x1UpButton.addEventListener("click", () => adjustX1(0.001));
+els.x2DownButton.addEventListener("click", () => adjustX2(-0.05));
+els.x2UpButton.addEventListener("click", () => adjustX2(0.05));
 els.speakButton.addEventListener("click", playModelAudio);
 els.recordButton.addEventListener("click", retryRecording);
 els.playMineButton.addEventListener("click", playRecording);
@@ -778,6 +856,7 @@ function render() {
   setChip(els.aeChip, focus.ae);
   setChip(els.thChip, focus.th);
   setChip(els.rChip, focus.r);
+  renderSettings();
 
   if (!word) {
     clearCanvas(els.modelCanvas, "▶で開始します");
@@ -813,6 +892,23 @@ function nextPractice() {
 function retryRecording() {
   if (state.index < 0) return;
   startRecording({ autoStop: true, source: "manual" });
+}
+
+function adjustX1(delta) {
+  state.x1Threshold = clamp(Number((state.x1Threshold + delta).toFixed(3)), 0.001, 0.2);
+  localStorage.setItem(X1_STORAGE_KEY, String(state.x1Threshold));
+  renderSettings();
+}
+
+function adjustX2(delta) {
+  state.x2SilenceSeconds = clamp(Number((state.x2SilenceSeconds + delta).toFixed(2)), 0.05, 2);
+  localStorage.setItem(X2_STORAGE_KEY, String(state.x2SilenceSeconds));
+  renderSettings();
+}
+
+function renderSettings() {
+  els.x1Value.textContent = state.x1Threshold.toFixed(3);
+  els.x2Value.textContent = `${state.x2SilenceSeconds.toFixed(2)}秒`;
 }
 
 function playModelAudio() {
@@ -980,8 +1076,8 @@ function startVad(stream) {
   source.connect(analyser);
 
   const data = new Float32Array(analyser.fftSize);
-  const threshold = 0.025;
-  const silenceAfterSpeechMs = 200;
+  const threshold = state.x1Threshold;
+  const silenceAfterSpeechMs = state.x2SilenceSeconds * 1000;
   const maxRecordingMs = 6000;
   const minSpeechMs = 120;
   let hasSpeech = false;
@@ -1045,7 +1141,8 @@ async function analyzeRecording(rawBlob, target) {
   const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
   const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
-  const audioBuffer = target === "user" ? trimUserSpeechBuffer(rawAudioBuffer) : trimModelSpeechBuffer(rawAudioBuffer);
+  const trimmed = target === "user" ? trimUserSpeechBuffer(rawAudioBuffer) : trimModelSpeechBuffer(rawAudioBuffer);
+  const audioBuffer = trimmed.audioBuffer;
   const samples = audioBuffer.getChannelData(0);
   const envelope = createEnvelope(samples, 160);
   const spectral = analyzeSpectrum(samples, audioBuffer.sampleRate);
@@ -1053,6 +1150,10 @@ async function analyzeRecording(rawBlob, target) {
 
   if (target === "model") {
     revokeUrl(state.modelUrl);
+    revokeUrl(state.rawModelUrl);
+    state.rawModelBlob = rawBlob;
+    state.rawModelUrl = URL.createObjectURL(rawBlob);
+    state.modelTrim = trimmed;
     state.modelAnalysis = analysis;
     state.modelBlob = encodeWav(audioBuffer);
     state.modelUrl = URL.createObjectURL(state.modelBlob);
@@ -1061,6 +1162,10 @@ async function analyzeRecording(rawBlob, target) {
     drawSpectrogram(els.modelSpectrumCanvas, spectral);
     els.modelDurationText.textContent = `${state.modelDurationMs} ms`;
   } else {
+    revokeUrl(state.rawRecordedUrl);
+    state.rawRecordedBlob = rawBlob;
+    state.rawRecordedUrl = URL.createObjectURL(rawBlob);
+    state.userTrim = trimmed;
     state.userAnalysis = analysis;
     state.recordedBlob = encodeWav(audioBuffer);
     revokeUrl(state.recordedUrl);
@@ -1125,8 +1230,14 @@ function saveAttempt() {
     focusScore: Math.round(focusScore),
     recordedUrl: state.recordedUrl,
     modelUrl: state.modelUrl,
+    rawModelUrl: state.rawModelUrl,
+    rawModelBlob: state.rawModelBlob,
     modelAnalysis: state.modelAnalysis,
     userAnalysis: state.userAnalysis,
+    rawRecordedUrl: state.rawRecordedUrl,
+    rawRecordedBlob: state.rawRecordedBlob,
+    modelTrim: state.modelTrim,
+    userTrim: state.userTrim,
     modelDurationMs: state.modelDurationMs,
     modelDurationText: els.modelDurationText.textContent,
     userDurationText: els.userDurationText.textContent,
@@ -1173,11 +1284,71 @@ function jumpToReviewedWord(index) {
   setStatus("録音済みデータを読み込みました");
 }
 
+async function exportSoundData() {
+  const records = [];
+  for (const [index, attempt] of [...state.attempts.entries()].sort((a, b) => a[0] - b[0])) {
+    const word = state.words[index];
+    records.push({
+      index,
+      id: word.id,
+      displaySpelling: word.displaySpelling,
+      spokenSpelling: word.spokenSpelling,
+      displayMeaning: word.displayMeaning,
+      phonetic: word.phonetic,
+      scores: {
+        overall: attempt.overall,
+        vowelScore: attempt.vowelScore,
+        focusScore: attempt.focusScore,
+      },
+      settings: {
+        x1Threshold: state.x1Threshold,
+        x2SilenceSeconds: state.x2SilenceSeconds,
+      },
+      model: {
+        rawAudio: await blobToDataUrl(attempt.rawModelBlob),
+        trimmedAudio: await blobToDataUrl(await urlToBlob(attempt.modelUrl)),
+        trim: attempt.modelTrim,
+        durationText: attempt.modelDurationText,
+        waveformPng: drawEnvelopeToDataUrl(attempt.modelAnalysis.envelope, "#157f7f"),
+        spectrumPng: drawSpectrogramToDataUrl(attempt.modelAnalysis.spectral),
+      },
+      user: {
+        rawAudio: await blobToDataUrl(attempt.rawRecordedBlob),
+        trimmedAudio: await blobToDataUrl(await urlToBlob(attempt.recordedUrl)),
+        trim: attempt.userTrim,
+        durationText: attempt.userDurationText,
+        waveformPng: drawEnvelopeToDataUrl(attempt.userAnalysis.envelope, "#bd5a2a"),
+        spectrumPng: drawSpectrogramToDataUrl(attempt.userAnalysis.spectral),
+      },
+    });
+  }
+
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    wordFileName: state.wordFileName,
+    records,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `soundData-${state.wordFileName || "session"}-${Date.now()}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  setStatus("データを書き出しました");
+}
+
 function restoreAttempt(index) {
   const attempt = state.attempts.get(index);
   clearCurrentAudio({ revokeSaved: false });
   state.recordedUrl = attempt.recordedUrl;
   state.modelUrl = attempt.modelUrl;
+  state.rawRecordedUrl = attempt.rawRecordedUrl;
+  state.rawModelUrl = attempt.rawModelUrl;
+  state.rawRecordedBlob = attempt.rawRecordedBlob;
+  state.rawModelBlob = attempt.rawModelBlob;
+  state.modelTrim = attempt.modelTrim;
+  state.userTrim = attempt.userTrim;
   state.modelDurationMs = attempt.modelDurationMs || 0;
   state.modelAnalysis = attempt.modelAnalysis;
   state.userAnalysis = attempt.userAnalysis;
@@ -1216,7 +1387,7 @@ function trimUserSpeechBuffer(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
   const source = audioBuffer.getChannelData(0);
   const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
-  const threshold = 0.018;
+  const threshold = state.x1Threshold;
   let speechStart = 0;
 
   for (let index = 0; index < source.length; index += windowSize) {
@@ -1227,10 +1398,15 @@ function trimUserSpeechBuffer(audioBuffer) {
     }
   }
 
-  const speechEnd = Math.max(speechStart + 1, source.length - Math.round(0.2 * sampleRate));
+  const speechEnd = Math.max(speechStart + 1, source.length - Math.round(state.x2SilenceSeconds * sampleRate));
   const trimmed = getAudioContext().createBuffer(1, Math.max(1, speechEnd - speechStart), sampleRate);
   trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
-  return trimmed;
+  return {
+    audioBuffer: trimmed,
+    startMs: Math.round((speechStart / sampleRate) * 1000),
+    endMs: Math.round((speechEnd / sampleRate) * 1000),
+    rawDurationMs: Math.round(audioBuffer.duration * 1000),
+  };
 }
 
 function trimModelSpeechBuffer(audioBuffer) {
@@ -1262,7 +1438,12 @@ function trimModelSpeechBuffer(audioBuffer) {
   speechEnd = Math.max(speechStart + 1, speechEnd);
   const trimmed = getAudioContext().createBuffer(1, Math.max(1, speechEnd - speechStart), sampleRate);
   trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
-  return trimmed;
+  return {
+    audioBuffer: trimmed,
+    startMs: Math.round((speechStart / sampleRate) * 1000),
+    endMs: Math.round((speechEnd / sampleRate) * 1000),
+    rawDurationMs: Math.round(audioBuffer.duration * 1000),
+  };
 }
 
 function normalize(values) {
@@ -1469,6 +1650,22 @@ function drawSpectrogram(canvas, spectral) {
   context.putImageData(image, 0, 0);
 }
 
+function drawEnvelopeToDataUrl(envelope, color) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 900;
+  canvas.height = 180;
+  drawEnvelope(canvas, envelope, color);
+  return canvas.toDataURL("image/png");
+}
+
+function drawSpectrogramToDataUrl(spectral) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 900;
+  canvas.height = 260;
+  drawSpectrogram(canvas, spectral);
+  return canvas.toDataURL("image/png");
+}
+
 function clearCanvas(canvas, text) {
   const context = canvas.getContext("2d");
   const { width, height } = canvas;
@@ -1483,17 +1680,25 @@ function clearCurrentAudio({ revokeSaved = true } = {}) {
   stopVad();
   clearUserAudio(revokeSaved);
   if (revokeSaved) revokeUrl(state.modelUrl);
-    state.modelBlob = null;
-    state.modelUrl = null;
-    state.modelDurationMs = 0;
+  if (revokeSaved) revokeUrl(state.rawModelUrl);
+  state.modelBlob = null;
+  state.rawModelBlob = null;
+  state.modelUrl = null;
+  state.rawModelUrl = null;
+  state.modelDurationMs = 0;
   state.modelAnalysis = null;
+  state.modelTrim = null;
 }
 
 function clearUserAudio(revokeSaved = true) {
   if (revokeSaved) revokeUrl(state.recordedUrl);
+  if (revokeSaved) revokeUrl(state.rawRecordedUrl);
   state.recordedBlob = null;
+  state.rawRecordedBlob = null;
   state.recordedUrl = null;
+  state.rawRecordedUrl = null;
   state.userAnalysis = null;
+  state.userTrim = null;
   state.recordingChunks = [];
   els.playMineButton.disabled = true;
   els.playMineButton.classList.remove("recording");
@@ -1503,6 +1708,22 @@ function clearUserAudio(revokeSaved = true) {
 
 function revokeUrl(url) {
   if (url) URL.revokeObjectURL(url);
+}
+
+function blobToDataUrl(blob) {
+  if (!blob) return "";
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function urlToBlob(url) {
+  if (!url) return null;
+  const response = await fetch(url);
+  return response.blob();
 }
 
 function setStatus(text) {
@@ -1665,6 +1886,11 @@ function encodeWav(audioBuffer) {
 
 function writeString(view, offset, value) {
   for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+}
+
+function readStoredNumber(key, fallback) {
+  const value = Number(localStorage.getItem(key));
+  return Number.isFinite(value) ? value : fallback;
 }
 
     </script>
