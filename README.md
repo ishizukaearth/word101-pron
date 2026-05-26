@@ -10,3 +10,4 @@ https://ishizukaearth.github.io/word101-pron/index.html?v=8
 録音データから発話データを切り出すパラメタ検討のためのデータの書き出しV9
 パラメタ：X1（無音レベル）とX2（録音終了無音継続時間）をアプリで変更v10
 v10で切り出し時刻を記録。データを見るviewer.htmlからwavデータファイルをDL
+V11音量レベルは10msのRMSで計算。X1.X2の初期値表示
