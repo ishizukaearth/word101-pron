@@ -203,6 +203,7 @@ progress {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
+  margin-top: 14px;
 }
 
 button {
@@ -486,44 +487,17 @@ select {
           </div>
         </div>
 
-        <div class="focus-row" aria-label="重点音">
-          <span class="focus-chip" id="aeChip">/ae/</span>
-          <span class="focus-chip" id="thChip">/th/</span>
-          <span class="focus-chip" id="rChip">/r/</span>
-        </div>
-
-        <div class="settings-row" aria-label="録音判定設定">
-          <div class="setting-box">
-            <span class="label">X1 RMS閾値</span>
-            <div class="stepper">
-              <button id="x1DownButton" type="button">−</button>
-              <strong id="x1Value">0.018</strong>
-              <button id="x1UpButton" type="button">＋</button>
-            </div>
-          </div>
-          <div class="setting-box">
-            <span class="label">X2 無音区間</span>
-            <div class="stepper">
-              <button id="x2DownButton" type="button">−</button>
-              <strong id="x2Value">0.20秒</strong>
-              <button id="x2UpButton" type="button">＋</button>
-            </div>
-          </div>
-          <div class="setting-box">
-            <span class="label">X3 開始前余裕</span>
-            <div class="stepper">
-              <button id="x3DownButton" type="button">−</button>
-              <strong id="x3Value">0 ms</strong>
-              <button id="x3UpButton" type="button">＋</button>
-            </div>
-          </div>
-        </div>
-
         <div class="controls" aria-label="練習操作">
           <button class="main-button" id="speakButton" type="button">モデル音声</button>
           <button class="record-button" id="recordButton" type="button">もう一度録音</button>
           <button class="main-button" id="playMineButton" type="button" disabled>自分を再生</button>
           <button class="main-button dark-button" id="reviewButton" type="button">レビュー</button>
+        </div>
+
+        <div class="focus-row" aria-label="重点音">
+          <span class="focus-chip" id="aeChip">/ae/</span>
+          <span class="focus-chip" id="thChip">/th/</span>
+          <span class="focus-chip" id="rChip">/r/</span>
         </div>
 
         <div class="score-grid">
@@ -538,6 +512,10 @@ select {
           <div class="score-tile">
             <span class="label">重点音</span>
             <strong id="focusScore">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">音声認識</span>
+            <strong id="recognitionResult">--</strong>
           </div>
         </div>
       </section>
@@ -578,25 +556,67 @@ select {
         </div>
         <div class="feature-grid">
           <div class="score-tile">
-            <span class="label">母音帯域</span>
+            <span class="label">モデル母音帯域</span>
+            <strong id="modelVowelFeature">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">モデル/r/候補</span>
+            <strong id="modelRFeature">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">モデル/th/高域</span>
+            <strong id="modelThFeature">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">モデルF1/F2</span>
+            <strong id="modelFormants">--</strong>
+          </div>
+          <div class="score-tile">
+            <span class="label">あなた母音帯域</span>
             <strong id="vowelFeature">--</strong>
           </div>
           <div class="score-tile">
-            <span class="label">/r/候補</span>
+            <span class="label">あなた/r/候補</span>
             <strong id="rFeature">--</strong>
           </div>
           <div class="score-tile">
-            <span class="label">/th/高域</span>
+            <span class="label">あなた/th/高域</span>
             <strong id="thFeature">--</strong>
           </div>
           <div class="score-tile">
-            <span class="label">母音一致</span>
+            <span class="label">母音一致 あなたF1/F2</span>
             <strong id="formantMatch">--</strong>
           </div>
         </div>
       </section>
 
       <section class="tools-panel">
+        <div class="settings-row" aria-label="録音判定設定">
+          <div class="setting-box">
+            <span class="label">X1 RMS閾値</span>
+            <div class="stepper">
+              <button id="x1DownButton" type="button">−</button>
+              <strong id="x1Value">0.018</strong>
+              <button id="x1UpButton" type="button">＋</button>
+            </div>
+          </div>
+          <div class="setting-box">
+            <span class="label">X2 無音区間</span>
+            <div class="stepper">
+              <button id="x2DownButton" type="button">−</button>
+              <strong id="x2Value">0.20秒</strong>
+              <button id="x2UpButton" type="button">＋</button>
+            </div>
+          </div>
+          <div class="setting-box">
+            <span class="label">X3 開始前余裕</span>
+            <div class="stepper">
+              <button id="x3DownButton" type="button">−</button>
+              <strong id="x3Value">0 ms</strong>
+              <button id="x3UpButton" type="button">＋</button>
+            </div>
+          </div>
+        </div>
         <details id="wordListDetails">
           <summary>単語リストを読み込む</summary>
           <div class="import-grid">
@@ -626,13 +646,6 @@ select {
           </div>
         </details>
 
-        <details>
-          <summary>音声認識レスポンス確認</summary>
-          <div class="recognition-box">
-            <button id="recognitionButton" type="button">ブラウザ音声認識を試す</button>
-            <p id="recognitionResult">未実行</p>
-          </div>
-        </details>
       </section>
       </div>
 
@@ -696,6 +709,7 @@ const state = {
   attempts: new Map(),
   audioContext: null,
   vad: null,
+  recognition: null,
   recordingStartedAt: 0,
   x1Threshold: readStoredNumber(X1_STORAGE_KEY, 0.018),
   x2SilenceSeconds: readStoredNumber(X2_STORAGE_KEY, 0.2),
@@ -748,6 +762,10 @@ const els = {
   vowelFeature: document.querySelector("#vowelFeature"),
   rFeature: document.querySelector("#rFeature"),
   thFeature: document.querySelector("#thFeature"),
+  modelVowelFeature: document.querySelector("#modelVowelFeature"),
+  modelRFeature: document.querySelector("#modelRFeature"),
+  modelThFeature: document.querySelector("#modelThFeature"),
+  modelFormants: document.querySelector("#modelFormants"),
   formantMatch: document.querySelector("#formantMatch"),
   fileInput: document.querySelector("#fileInput"),
   wordListDetails: document.querySelector("#wordListDetails"),
@@ -755,7 +773,6 @@ const els = {
   loadHostedButton: document.querySelector("#loadHostedButton"),
   wordPaste: document.querySelector("#wordPaste"),
   loadPasteButton: document.querySelector("#loadPasteButton"),
-  recognitionButton: document.querySelector("#recognitionButton"),
   recognitionResult: document.querySelector("#recognitionResult"),
 };
 
@@ -778,7 +795,6 @@ els.playMineButton.addEventListener("click", playRecording);
 els.fileInput.addEventListener("change", loadSelectedFile);
 els.loadHostedButton.addEventListener("click", loadHostedWords);
 els.loadPasteButton.addEventListener("click", loadPastedWords);
-els.recognitionButton.addEventListener("click", runRecognitionCheck);
 
 async function bootstrap() {
   await requestMicrophoneAccess();
@@ -1037,6 +1053,7 @@ async function startRecording({ autoStop, source }) {
     state.mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     state.recordingChunks = [];
     state.recordingStartedAt = performance.now();
+    startSpeechRecognitionForCurrentWord();
 
     state.mediaRecorder.addEventListener("dataavailable", (event) => {
       if (event.data.size > 0) state.recordingChunks.push(event.data);
@@ -1044,6 +1061,7 @@ async function startRecording({ autoStop, source }) {
 
     state.mediaRecorder.addEventListener("stop", async () => {
       stopVad();
+      stopSpeechRecognition();
       const type = state.recordingChunks[0]?.type || "audio/webm";
       const rawBlob = new Blob(state.recordingChunks, { type });
       els.recordButton.textContent = "もう一度録音";
@@ -1240,6 +1258,10 @@ function renderScores(elapsedMs) {
   els.vowelScore.textContent = Number.isFinite(vowelScore) ? Math.round(vowelScore) : "--";
   els.focusScore.textContent = Number.isFinite(focusScore) ? Math.round(focusScore) : "--";
   els.analysisLatency.textContent = `解析 ${Math.round(elapsedMs)}ms`;
+  els.modelVowelFeature.textContent = Math.round(state.modelAnalysis.spectral.vowel * 100);
+  els.modelRFeature.textContent = Math.round(state.modelAnalysis.spectral.rBand * 100);
+  els.modelThFeature.textContent = Math.round(state.modelAnalysis.spectral.thBand * 100);
+  els.modelFormants.textContent = getFormantText(state.modelAnalysis);
   els.vowelFeature.textContent = Math.round(state.userAnalysis.spectral.vowel * 100);
   els.rFeature.textContent = Math.round(state.userAnalysis.spectral.rBand * 100);
   els.thFeature.textContent = Math.round(state.userAnalysis.spectral.thBand * 100);
@@ -1269,8 +1291,13 @@ function getBandSimilarityScore() {
 function getFormantMatchText() {
   if (!state.modelAnalysis || !state.userAnalysis) return "--";
   const score = getFormantMatchScore();
-  const user = state.userAnalysis.spectral.formants;
-  return `${Math.round(score)} (${user.f1}/${user.f2})`;
+  return `${Math.round(score)} (${getFormantText(state.userAnalysis)})`;
+}
+
+function getFormantText(analysis) {
+  if (!analysis?.spectral?.formants) return "--";
+  const formants = analysis.spectral.formants;
+  return `${formants.f1}/${formants.f2}`;
 }
 
 function saveAttempt() {
@@ -1507,16 +1534,17 @@ function trimModelSpeechBuffer(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
   const source = audioBuffer.getChannelData(0);
   const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
+  const leadingCutSamples = Math.min(source.length, Math.round(sampleRate * 0.2));
   const noiseWindowSamples = Math.min(source.length, Math.round(sampleRate * 0.18));
   const noiseRms = getRms(source.subarray(0, noiseWindowSamples));
   const threshold = Math.max(0.018, noiseRms * 4);
-  let speechStart = 0;
+  let speechStart = leadingCutSamples;
   let speechEnd = source.length;
 
-  for (let index = 0; index < source.length; index += windowSize) {
+  for (let index = leadingCutSamples; index < source.length; index += windowSize) {
     const end = Math.min(source.length, index + windowSize);
     if (getRms(source.subarray(index, end)) >= threshold) {
-      speechStart = Math.max(0, index - Math.round(0.03 * sampleRate));
+      speechStart = Math.max(leadingCutSamples, index - Math.round(0.03 * sampleRate));
       break;
     }
   }
@@ -1965,35 +1993,75 @@ function loadWordsFromText(text, fileName) {
   render();
 }
 
-function runRecognitionCheck() {
+function startSpeechRecognitionForCurrentWord() {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Recognition) {
     els.recognitionResult.textContent = "このブラウザは音声認識に対応していません";
     return;
   }
+  stopSpeechRecognition();
+  const expected = normalizeRecognitionText(currentWord()?.spokenSpelling || currentWord()?.displaySpelling || "");
   const startedAt = performance.now();
   const recognition = new Recognition();
   recognition.lang = "en-US";
   recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
+  recognition.maxAlternatives = 5;
   els.recognitionResult.textContent = "聞き取り中";
   recognition.onresult = (event) => {
     const elapsed = Math.round(performance.now() - startedAt);
-    els.recognitionResult.textContent = `${elapsed}ms: "${event.results[0][0].transcript}"`;
+    const alternatives = Array.from(event.results[0] || []);
+    const best = alternatives[0];
+    const match = alternatives.find((item) => normalizeRecognitionText(item.transcript) === expected);
+    const selected = match || best;
+    const transcript = selected?.transcript || "";
+    const confidence = Number.isFinite(selected?.confidence) && selected.confidence > 0
+      ? `${Math.round(selected.confidence * 100)}%`
+      : "信頼度なし";
+    const mark = normalizeRecognitionText(transcript) === expected ? "一致" : "不一致";
+    els.recognitionResult.textContent = `${mark} ${confidence} ${elapsed}ms`;
   };
   recognition.onerror = (event) => {
     els.recognitionResult.textContent = `認識エラー: ${event.error}`;
   };
   recognition.onend = () => {
     if (els.recognitionResult.textContent === "聞き取り中") els.recognitionResult.textContent = "音声を検出できませんでした";
+    if (state.recognition === recognition) state.recognition = null;
   };
+  state.recognition = recognition;
   recognition.start();
+}
+
+function stopSpeechRecognition() {
+  if (!state.recognition) return;
+  const recognition = state.recognition;
+  state.recognition = null;
+  try {
+    recognition.stop();
+  } catch (error) {
+    try {
+      recognition.abort();
+    } catch (_) {
+      // The browser may already have stopped recognition.
+    }
+  }
+}
+
+function normalizeRecognitionText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z']/g, "")
+    .replace(/^the$/, "the");
 }
 
 function resetScores() {
   els.overallScore.textContent = "--";
   els.vowelScore.textContent = "--";
   els.focusScore.textContent = "--";
+  els.recognitionResult.textContent = "--";
+  els.modelVowelFeature.textContent = "--";
+  els.modelRFeature.textContent = "--";
+  els.modelThFeature.textContent = "--";
+  els.modelFormants.textContent = "--";
   els.vowelFeature.textContent = "--";
   els.rFeature.textContent = "--";
   els.thFeature.textContent = "--";
@@ -2064,4 +2132,6 @@ function readStoredNumber(key, fallback) {
 </script>
   </body>
 </html>
+
+
 
