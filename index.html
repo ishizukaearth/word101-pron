@@ -527,13 +527,15 @@ select {
         </div>
         <div class="wave-stack">
           <div>
-            <div class="wave-label">モデル録音 <span id="modelDurationText">-- ms</span> <span id="modelTrimText">発話区間 ----</span></div>
+            <div class="wave-label">モデル発話区間 <span id="modelDurationText">-- ms</span> <span id="modelTrimText">発話区間 ----</span></div>
             <canvas id="modelCanvas" width="900" height="180"></canvas>
+            <div class="wave-label">モデル録音全体を再生</div>
             <audio id="modelRawPlayer" controls></audio>
           </div>
           <div>
-            <div class="wave-label">あなたの録音 <span id="userDurationText">-- ms</span> <span id="userTrimText">発話区間 ----</span></div>
+            <div class="wave-label">あなたの発話区間 <span id="userDurationText">-- ms</span> <span id="userTrimText">発話区間 ----</span></div>
             <canvas id="userCanvas" width="900" height="180"></canvas>
+            <div class="wave-label">あなたの録音全体を再生</div>
             <audio id="userRawPlayer" controls></audio>
           </div>
         </div>
@@ -596,7 +598,7 @@ select {
             <span class="label">X1 RMS閾値</span>
             <div class="stepper">
               <button id="x1DownButton" type="button">−</button>
-              <strong id="x1Value">0.018</strong>
+              <strong id="x1Value">0.001</strong>
               <button id="x1UpButton" type="button">＋</button>
             </div>
           </div>
@@ -677,7 +679,7 @@ const WORD_FILES = [
 ];
 
 const STORAGE_KEY = "jh101-last-word-file";
-const X1_STORAGE_KEY = "jh101-rms-threshold-x1";
+const X1_STORAGE_KEY = "jh101-rms-threshold-x1-v2";
 const X2_STORAGE_KEY = "jh101-silence-seconds-x2";
 const X3_STORAGE_KEY = "jh101-preroll-ms-x3";
 
@@ -711,7 +713,7 @@ const state = {
   vad: null,
   recognition: null,
   recordingStartedAt: 0,
-  x1Threshold: readStoredNumber(X1_STORAGE_KEY, 0.018),
+  x1Threshold: readStoredNumber(X1_STORAGE_KEY, 0.001),
   x2SilenceSeconds: readStoredNumber(X2_STORAGE_KEY, 0.2),
   x3PrerollMs: readStoredNumber(X3_STORAGE_KEY, 0),
   lastMetrics: null,
@@ -1534,10 +1536,15 @@ function trimModelSpeechBuffer(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
   const source = audioBuffer.getChannelData(0);
   const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
-  const leadingCutSamples = Math.min(source.length, Math.round(sampleRate * 0.2));
   const noiseWindowSamples = Math.min(source.length, Math.round(sampleRate * 0.18));
   const noiseRms = getRms(source.subarray(0, noiseWindowSamples));
-  const threshold = Math.max(0.018, noiseRms * 4);
+  const delayCutSamples = Math.min(source.length, Math.round(sampleRate * 0.2));
+  const earlyProbeStart = Math.min(source.length, Math.round(sampleRate * 0.03));
+  const earlyProbeEnd = Math.min(source.length, Math.round(sampleRate * 0.18));
+  const earlyRms = getRms(source.subarray(earlyProbeStart, earlyProbeEnd));
+  const hasEarlySpeech = earlyRms >= 0.01;
+  const threshold = hasEarlySpeech ? Math.max(0.006, earlyRms * 0.35) : Math.max(0.018, noiseRms * 4);
+  const leadingCutSamples = hasEarlySpeech ? 0 : delayCutSamples;
   let speechStart = leadingCutSamples;
   let speechEnd = source.length;
 
@@ -2084,6 +2091,7 @@ function clamp(value, min, max) {
 }
 
 function getRms(samples) {
+  if (!samples.length) return 0;
   let sumSquares = 0;
   for (const sample of samples) sumSquares += sample * sample;
   return Math.sqrt(sumSquares / samples.length);
@@ -2132,6 +2140,7 @@ function readStoredNumber(key, fallback) {
 </script>
   </body>
 </html>
+
 
 
 
