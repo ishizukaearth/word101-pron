@@ -169,7 +169,7 @@ progress {
 
 .settings-row {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   margin: 0 0 16px;
 }
@@ -329,6 +329,11 @@ canvas {
   background: #fbfcfd;
 }
 
+audio {
+  width: 100%;
+  margin-top: 6px;
+}
+
 #spectrumCanvas,
 #modelSpectrumCanvas {
   height: 190px;
@@ -455,7 +460,7 @@ select {
   }
 }
 
-    </style>
+</style>
   </head>
   <body>
     <main class="app-shell">
@@ -504,6 +509,14 @@ select {
               <button id="x2UpButton" type="button">＋</button>
             </div>
           </div>
+          <div class="setting-box">
+            <span class="label">X3 開始前余裕</span>
+            <div class="stepper">
+              <button id="x3DownButton" type="button">−</button>
+              <strong id="x3Value">0 ms</strong>
+              <button id="x3UpButton" type="button">＋</button>
+            </div>
+          </div>
         </div>
 
         <div class="controls" aria-label="練習操作">
@@ -538,10 +551,12 @@ select {
           <div>
             <div class="wave-label">モデル録音 <span id="modelDurationText">-- ms</span> <span id="modelTrimText">発話区間 ----</span></div>
             <canvas id="modelCanvas" width="900" height="180"></canvas>
+            <audio id="modelRawPlayer" controls></audio>
           </div>
           <div>
             <div class="wave-label">あなたの録音 <span id="userDurationText">-- ms</span> <span id="userTrimText">発話区間 ----</span></div>
             <canvas id="userCanvas" width="900" height="180"></canvas>
+            <audio id="userRawPlayer" controls></audio>
           </div>
         </div>
       </section>
@@ -651,6 +666,7 @@ const WORD_FILES = [
 const STORAGE_KEY = "jh101-last-word-file";
 const X1_STORAGE_KEY = "jh101-rms-threshold-x1";
 const X2_STORAGE_KEY = "jh101-silence-seconds-x2";
+const X3_STORAGE_KEY = "jh101-preroll-ms-x3";
 
 const state = {
   words: [],
@@ -662,12 +678,16 @@ const state = {
   recordingChunks: [],
   recordedBlob: null,
   rawRecordedBlob: null,
+  rawRecordedWavBlob: null,
   recordedUrl: null,
   rawRecordedUrl: null,
+  rawRecordedWavUrl: null,
   modelBlob: null,
   rawModelBlob: null,
+  rawModelWavBlob: null,
   modelUrl: null,
   rawModelUrl: null,
+  rawModelWavUrl: null,
   modelDurationMs: 0,
   modelAnalysis: null,
   userAnalysis: null,
@@ -679,6 +699,7 @@ const state = {
   recordingStartedAt: 0,
   x1Threshold: readStoredNumber(X1_STORAGE_KEY, 0.018),
   x2SilenceSeconds: readStoredNumber(X2_STORAGE_KEY, 0.2),
+  x3PrerollMs: readStoredNumber(X3_STORAGE_KEY, 0),
   lastMetrics: null,
 };
 
@@ -695,10 +716,13 @@ const els = {
   rChip: document.querySelector("#rChip"),
   x1Value: document.querySelector("#x1Value"),
   x2Value: document.querySelector("#x2Value"),
+  x3Value: document.querySelector("#x3Value"),
   x1DownButton: document.querySelector("#x1DownButton"),
   x1UpButton: document.querySelector("#x1UpButton"),
   x2DownButton: document.querySelector("#x2DownButton"),
   x2UpButton: document.querySelector("#x2UpButton"),
+  x3DownButton: document.querySelector("#x3DownButton"),
+  x3UpButton: document.querySelector("#x3UpButton"),
   nextWordButton: document.querySelector("#nextWordButton"),
   reviewButton: document.querySelector("#reviewButton"),
   exportDataButton: document.querySelector("#exportDataButton"),
@@ -715,6 +739,8 @@ const els = {
   userDurationText: document.querySelector("#userDurationText"),
   modelTrimText: document.querySelector("#modelTrimText"),
   userTrimText: document.querySelector("#userTrimText"),
+  modelRawPlayer: document.querySelector("#modelRawPlayer"),
+  userRawPlayer: document.querySelector("#userRawPlayer"),
   analysisLatency: document.querySelector("#analysisLatency"),
   overallScore: document.querySelector("#overallScore"),
   vowelScore: document.querySelector("#vowelScore"),
@@ -744,6 +770,8 @@ els.x1DownButton.addEventListener("click", () => adjustX1(-0.001));
 els.x1UpButton.addEventListener("click", () => adjustX1(0.001));
 els.x2DownButton.addEventListener("click", () => adjustX2(-0.05));
 els.x2UpButton.addEventListener("click", () => adjustX2(0.05));
+els.x3DownButton.addEventListener("click", () => adjustX3(-50));
+els.x3UpButton.addEventListener("click", () => adjustX3(50));
 els.speakButton.addEventListener("click", playModelAudio);
 els.recordButton.addEventListener("click", retryRecording);
 els.playMineButton.addEventListener("click", playRecording);
@@ -908,9 +936,16 @@ function adjustX2(delta) {
   renderSettings();
 }
 
+function adjustX3(delta) {
+  state.x3PrerollMs = clamp(state.x3PrerollMs + delta, 0, 500);
+  localStorage.setItem(X3_STORAGE_KEY, String(state.x3PrerollMs));
+  renderSettings();
+}
+
 function renderSettings() {
   els.x1Value.textContent = state.x1Threshold.toFixed(3);
   els.x2Value.textContent = `${state.x2SilenceSeconds.toFixed(2)}秒`;
+  els.x3Value.textContent = `${state.x3PrerollMs} ms`;
 }
 
 function playModelAudio() {
@@ -955,7 +990,7 @@ async function speakCurrentWord({ recordAfter }) {
       setStatus("聞き比べできます");
     }
   };
-  window.speechSynthesis.speak(utterance);
+  window.setTimeout(() => window.speechSynthesis.speak(utterance), recordAfter ? 200 : 0);
 }
 
 async function startModelCapture() {
@@ -1145,6 +1180,7 @@ async function analyzeRecording(rawBlob, target) {
   const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
   const trimmed = target === "user" ? trimUserSpeechBuffer(rawAudioBuffer) : trimModelSpeechBuffer(rawAudioBuffer);
   const audioBuffer = trimmed.audioBuffer;
+  const rawWavBlob = encodeWav(rawAudioBuffer);
   const samples = audioBuffer.getChannelData(0);
   const rmsEnvelope = createRmsEnvelope(samples, 160);
   const rmsEnvelope10ms = createRmsEnvelopeByWindow(samples, audioBuffer.sampleRate, 10);
@@ -1155,8 +1191,11 @@ async function analyzeRecording(rawBlob, target) {
   if (target === "model") {
     revokeUrl(state.modelUrl);
     revokeUrl(state.rawModelUrl);
+    revokeUrl(state.rawModelWavUrl);
     state.rawModelBlob = rawBlob;
     state.rawModelUrl = URL.createObjectURL(rawBlob);
+    state.rawModelWavBlob = rawWavBlob;
+    state.rawModelWavUrl = URL.createObjectURL(rawWavBlob);
     state.modelTrim = trimmed;
     state.modelAnalysis = analysis;
     state.modelBlob = encodeWav(audioBuffer);
@@ -1165,11 +1204,15 @@ async function analyzeRecording(rawBlob, target) {
     drawEnvelope(els.modelCanvas, envelope, "#157f7f");
     drawSpectrogram(els.modelSpectrumCanvas, spectral);
     els.modelDurationText.textContent = `${state.modelDurationMs} ms`;
-    els.modelTrimText.textContent = `発話区間 ${trimmed.startMs}-${trimmed.endMs}`;
+    els.modelTrimText.textContent = formatTrimText(trimmed);
+    els.modelRawPlayer.src = state.rawModelWavUrl;
   } else {
     revokeUrl(state.rawRecordedUrl);
+    revokeUrl(state.rawRecordedWavUrl);
     state.rawRecordedBlob = rawBlob;
     state.rawRecordedUrl = URL.createObjectURL(rawBlob);
+    state.rawRecordedWavBlob = rawWavBlob;
+    state.rawRecordedWavUrl = URL.createObjectURL(rawWavBlob);
     state.userTrim = trimmed;
     state.userAnalysis = analysis;
     state.recordedBlob = encodeWav(audioBuffer);
@@ -1179,9 +1222,14 @@ async function analyzeRecording(rawBlob, target) {
     drawEnvelope(els.userCanvas, envelope, "#bd5a2a");
     drawSpectrogram(els.spectrumCanvas, spectral);
     els.userDurationText.textContent = `${Math.round(audioBuffer.duration * 1000)} ms`;
-    els.userTrimText.textContent = `発話区間 ${trimmed.startMs}-${trimmed.endMs}`;
+    els.userTrimText.textContent = formatTrimText(trimmed);
+    els.userRawPlayer.src = state.rawRecordedWavUrl;
     renderScores(performance.now() - analysisStartedAt);
   }
+}
+
+function formatTrimText(trimmed) {
+  return `全体 ${trimmed.rawDurationMs} ms / 発話区間 ${trimmed.startMs}-${trimmed.endMs}`;
 }
 
 function renderScores(elapsedMs) {
@@ -1238,10 +1286,14 @@ function saveAttempt() {
     modelUrl: state.modelUrl,
     rawModelUrl: state.rawModelUrl,
     rawModelBlob: state.rawModelBlob,
+    rawModelWavUrl: state.rawModelWavUrl,
+    rawModelWavBlob: state.rawModelWavBlob,
     modelAnalysis: state.modelAnalysis,
     userAnalysis: state.userAnalysis,
     rawRecordedUrl: state.rawRecordedUrl,
     rawRecordedBlob: state.rawRecordedBlob,
+    rawRecordedWavUrl: state.rawRecordedWavUrl,
+    rawRecordedWavBlob: state.rawRecordedWavBlob,
     modelTrim: state.modelTrim,
     userTrim: state.userTrim,
     modelDurationMs: state.modelDurationMs,
@@ -1311,9 +1363,10 @@ async function exportSoundData() {
       settings: {
         x1Threshold: state.x1Threshold,
         x2SilenceSeconds: state.x2SilenceSeconds,
+        x3PrerollMs: state.x3PrerollMs,
       },
       model: {
-        rawAudio: await blobToDataUrl(attempt.rawModelBlob),
+        rawAudio: await blobToDataUrl(attempt.rawModelWavBlob || attempt.rawModelBlob),
         trimmedAudio: await blobToDataUrl(await urlToBlob(attempt.modelUrl)),
         trim: attempt.modelTrim,
         durationText: attempt.modelDurationText,
@@ -1321,7 +1374,7 @@ async function exportSoundData() {
         spectrumPng: drawSpectrogramToDataUrl(attempt.modelAnalysis.spectral),
       },
       user: {
-        rawAudio: await blobToDataUrl(attempt.rawRecordedBlob),
+        rawAudio: await blobToDataUrl(attempt.rawRecordedWavBlob || attempt.rawRecordedBlob),
         trimmedAudio: await blobToDataUrl(await urlToBlob(attempt.recordedUrl)),
         trim: attempt.userTrim,
         durationText: attempt.userDurationText,
@@ -1355,6 +1408,10 @@ function restoreAttempt(index) {
   state.rawModelUrl = attempt.rawModelUrl;
   state.rawRecordedBlob = attempt.rawRecordedBlob;
   state.rawModelBlob = attempt.rawModelBlob;
+  state.rawRecordedWavUrl = attempt.rawRecordedWavUrl;
+  state.rawModelWavUrl = attempt.rawModelWavUrl;
+  state.rawRecordedWavBlob = attempt.rawRecordedWavBlob;
+  state.rawModelWavBlob = attempt.rawModelWavBlob;
   state.modelTrim = attempt.modelTrim;
   state.userTrim = attempt.userTrim;
   state.modelDurationMs = attempt.modelDurationMs || 0;
@@ -1364,6 +1421,8 @@ function restoreAttempt(index) {
   els.userDurationText.textContent = attempt.userDurationText || "-- ms";
   els.modelTrimText.textContent = attempt.modelTrimText || "発話区間 ----";
   els.userTrimText.textContent = attempt.userTrimText || "発話区間 ----";
+  els.modelRawPlayer.src = state.rawModelWavUrl || state.rawModelUrl || "";
+  els.userRawPlayer.src = state.rawRecordedWavUrl || state.rawRecordedUrl || "";
   els.playMineButton.disabled = false;
   drawEnvelope(els.modelCanvas, attempt.modelAnalysis.envelope, "#157f7f");
   drawEnvelope(els.userCanvas, attempt.userAnalysis.envelope, "#bd5a2a");
@@ -1428,7 +1487,7 @@ function trimUserSpeechBuffer(audioBuffer) {
   for (let index = 0; index < source.length; index += windowSize) {
     const end = Math.min(source.length, index + windowSize);
     if (getRms(source.subarray(index, end)) >= threshold) {
-      speechStart = Math.max(0, index - Math.round(0.03 * sampleRate));
+      speechStart = Math.max(0, index - Math.round((state.x3PrerollMs / 1000) * sampleRate));
       break;
     }
   }
@@ -1776,22 +1835,30 @@ function clearCurrentAudio({ revokeSaved = true } = {}) {
   clearUserAudio(revokeSaved);
   if (revokeSaved) revokeUrl(state.modelUrl);
   if (revokeSaved) revokeUrl(state.rawModelUrl);
+  if (revokeSaved) revokeUrl(state.rawModelWavUrl);
   state.modelBlob = null;
   state.rawModelBlob = null;
+  state.rawModelWavBlob = null;
   state.modelUrl = null;
   state.rawModelUrl = null;
+  state.rawModelWavUrl = null;
   state.modelDurationMs = 0;
   state.modelAnalysis = null;
   state.modelTrim = null;
+  els.modelRawPlayer.removeAttribute("src");
+  els.modelRawPlayer.load();
 }
 
 function clearUserAudio(revokeSaved = true) {
   if (revokeSaved) revokeUrl(state.recordedUrl);
   if (revokeSaved) revokeUrl(state.rawRecordedUrl);
+  if (revokeSaved) revokeUrl(state.rawRecordedWavUrl);
   state.recordedBlob = null;
   state.rawRecordedBlob = null;
+  state.rawRecordedWavBlob = null;
   state.recordedUrl = null;
   state.rawRecordedUrl = null;
+  state.rawRecordedWavUrl = null;
   state.userAnalysis = null;
   state.userTrim = null;
   state.recordingChunks = [];
@@ -1799,6 +1866,8 @@ function clearUserAudio(revokeSaved = true) {
   els.playMineButton.classList.remove("recording");
   els.userDurationText.textContent = "-- ms";
   els.userTrimText.textContent = "発話区間 ----";
+  els.userRawPlayer.removeAttribute("src");
+  els.userRawPlayer.load();
   if (!state.modelUrl) els.modelDurationText.textContent = "-- ms";
   if (!state.modelUrl) els.modelTrimText.textContent = "発話区間 ----";
 }
@@ -1992,6 +2061,7 @@ function readStoredNumber(key, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-    </script>
+</script>
   </body>
 </html>
+
