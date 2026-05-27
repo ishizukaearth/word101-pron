@@ -46,8 +46,11 @@ const state = {
   modelTrim: null,
   userTrim: null,
   attempts: new Map(),
+  diagnostics: [],
   audioContext: null,
   vad: null,
+  isRecording: false,
+  lastAnalysisStage: "",
   recordingStartedAt: 0,
   x1Threshold: readStoredNumber(X1_STORAGE_KEY, 0.001),
   x2SilenceSeconds: readStoredNumber(X2_STORAGE_KEY, 0.2),
@@ -78,6 +81,7 @@ const els = {
   nextWordButton: document.querySelector("#nextWordButton"),
   reviewButton: document.querySelector("#reviewButton"),
   exportDataButton: document.querySelector("#exportDataButton"),
+  exportDiagnosticsButton: document.querySelector("#exportDiagnosticsButton"),
   reviewList: document.querySelector("#reviewList"),
   speakButton: document.querySelector("#speakButton"),
   recordButton: document.querySelector("#recordButton"),
@@ -120,6 +124,7 @@ bootstrap();
 els.nextWordButton.addEventListener("click", nextPractice);
 els.reviewButton.addEventListener("click", showReview);
 els.exportDataButton.addEventListener("click", exportSoundData);
+els.exportDiagnosticsButton.addEventListener("click", exportDiagnostics);
 els.x1DownButton.addEventListener("click", () => adjustX1(-0.001));
 els.x1UpButton.addEventListener("click", () => adjustX1(0.001));
 els.x2DownButton.addEventListener("click", () => adjustX2(-0.05));
@@ -229,11 +234,13 @@ function render() {
     : state.words.length
       ? "▶で最初の単語を開始"
       : "単語リストを選択してください";
-  els.nextWordButton.disabled = !state.words.length || state.index === state.words.length - 1;
-  els.reviewButton.disabled = !state.attempts.size;
-  els.speakButton.disabled = state.index < 0;
+  els.nextWordButton.disabled = state.isRecording || !state.words.length || state.index === state.words.length - 1;
+  els.reviewButton.disabled = state.isRecording || !state.attempts.size;
+  els.exportDiagnosticsButton.disabled = !state.diagnostics.length;
+  els.speakButton.disabled = state.isRecording || state.index < 0;
   els.recordButton.disabled = state.index < 0;
-  els.playMineButton.disabled = !state.recordedUrl;
+  els.playMineButton.disabled = state.isRecording || !state.recordedUrl;
+  updateNextButtonLight();
 
   const focus = word ? getFocusSounds(word) : { ae: false, th: false, r: false };
   setChip(els.aeChip, focus.ae);
@@ -256,6 +263,15 @@ function render() {
   }
 }
 
+function updateNextButtonLight() {
+  const canMoveNext = !state.isRecording
+    && Boolean(state.recordedUrl)
+    && state.index >= 0
+    && state.index < state.words.length - 1;
+  els.nextWordButton.classList.toggle("recording", state.isRecording);
+  els.nextWordButton.classList.toggle("next-ready", canMoveNext);
+}
+
 function currentWord() {
   return state.index >= 0 ? state.words[state.index] : null;
 }
@@ -265,6 +281,7 @@ function setChip(element, active) {
 }
 
 function nextPractice() {
+  if (state.isRecording) return;
   if (state.index >= state.words.length - 1) return;
   state.index += 1;
   clearCurrentAudio({ revokeSaved: false });
@@ -390,6 +407,7 @@ async function startRecording({ autoStop, source }) {
     state.mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     state.recordingChunks = [];
     state.recordingStartedAt = performance.now();
+    state.isRecording = true;
 
     state.mediaRecorder.addEventListener("dataavailable", (event) => {
       if (event.data.size > 0) state.recordingChunks.push(event.data);
@@ -403,20 +421,52 @@ async function startRecording({ autoStop, source }) {
       els.recordButton.classList.remove("recording");
       els.playMineButton.classList.remove("recording");
       setStatus("録音完了");
-      await analyzeRecording(rawBlob, "user");
-      saveAttempt();
-      releaseMicrophoneStream();
-      setStatus("▶で次の単語を開始");
+      try {
+        await analyzeRecording(rawBlob, "user");
+        saveAttempt();
+        setStatus("▶で次の単語を開始");
+      } catch (error) {
+        console.error(error);
+        await recordAnalysisFailure(error, rawBlob, {
+          type,
+          chunkCount: state.recordingChunks.length,
+          chunkSizes: state.recordingChunks.map((chunk) => chunk.size),
+          elapsedMs: Math.round(performance.now() - state.recordingStartedAt),
+        });
+        clearUserAudio();
+        setStatus("録音データを解析できませんでした。もう一度録音してください");
+      } finally {
+        state.isRecording = false;
+        releaseMicrophoneStream();
+        els.recordButton.textContent = "もう一度録音";
+        els.recordButton.classList.remove("recording");
+        els.playMineButton.classList.remove("recording");
+        els.nextWordButton.disabled = !state.words.length || state.index === state.words.length - 1;
+        els.speakButton.disabled = state.index < 0;
+        els.reviewButton.disabled = !state.attempts.size;
+        els.exportDiagnosticsButton.disabled = !state.diagnostics.length;
+        els.playMineButton.disabled = !state.recordedUrl;
+        updateNextButtonLight();
+      }
     }, { once: true });
 
     state.mediaRecorder.start(100);
     els.recordButton.textContent = "録音停止";
     els.recordButton.classList.add("recording");
+    els.nextWordButton.disabled = true;
+    els.nextWordButton.classList.add("recording");
+    els.nextWordButton.classList.remove("next-ready");
+    els.speakButton.disabled = true;
+    els.reviewButton.disabled = true;
     els.playMineButton.disabled = true;
     els.playMineButton.classList.add("recording");
     setStatus(source === "model" ? "復唱してください" : "録音中");
     if (autoStop) startVad(stream);
   } catch (error) {
+    state.isRecording = false;
+    els.recordButton.textContent = "もう一度録音";
+    els.recordButton.classList.remove("recording");
+    els.playMineButton.classList.remove("recording");
     setStatus("マイクの使用が許可されませんでした");
   }
 }
@@ -528,20 +578,27 @@ function playRecording() {
 
 async function analyzeRecording(rawBlob, target) {
   const analysisStartedAt = performance.now();
+  state.lastAnalysisStage = "blob.arrayBuffer";
   const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
+  state.lastAnalysisStage = "decodeAudioData";
   const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
+  state.lastAnalysisStage = target === "user" ? "trimUserSpeechBuffer" : "trimModelSpeechBuffer";
   const trimmed = target === "user" ? trimUserSpeechBuffer(rawAudioBuffer) : trimModelSpeechBuffer(rawAudioBuffer);
   const audioBuffer = trimmed.audioBuffer;
+  state.lastAnalysisStage = "encode raw wav";
   const rawWavBlob = encodeWav(rawAudioBuffer);
   const samples = audioBuffer.getChannelData(0);
+  state.lastAnalysisStage = "create rms envelope";
   const rmsEnvelope = createRmsEnvelope(samples, 160);
   const rmsEnvelope10ms = createRmsEnvelopeByWindow(samples, audioBuffer.sampleRate, 10);
   const envelope = normalize(rmsEnvelope);
+  state.lastAnalysisStage = "analyze spectrum";
   const spectral = analyzeSpectrum(samples, audioBuffer.sampleRate);
   const analysis = { spectral, envelope, rmsEnvelope, rmsEnvelope10ms };
 
   if (target === "model") {
+    state.lastAnalysisStage = "render model analysis";
     revokeUrl(state.modelUrl);
     revokeUrl(state.rawModelUrl);
     revokeUrl(state.rawModelWavUrl);
@@ -560,6 +617,7 @@ async function analyzeRecording(rawBlob, target) {
     els.modelTrimText.textContent = formatTrimText(trimmed);
     els.modelRawPlayer.src = state.rawModelWavUrl;
   } else {
+    state.lastAnalysisStage = "render user analysis";
     revokeUrl(state.rawRecordedUrl);
     revokeUrl(state.rawRecordedWavUrl);
     state.rawRecordedBlob = rawBlob;
@@ -579,6 +637,7 @@ async function analyzeRecording(rawBlob, target) {
     els.userRawPlayer.src = state.rawRecordedWavUrl;
     renderScores(performance.now() - analysisStartedAt);
   }
+  state.lastAnalysisStage = "";
 }
 
 function formatTrimText(trimmed) {
@@ -759,6 +818,68 @@ async function exportSoundData() {
   anchor.click();
   URL.revokeObjectURL(url);
   setStatus("データを書き出しました");
+}
+
+async function recordAnalysisFailure(error, rawBlob, recorderInfo) {
+  const word = currentWord();
+  const diagnostic = {
+    exportedFor: "Au1-analysis-failure",
+    failedAt: new Date().toISOString(),
+    wordIndex: state.index,
+    wordId: word?.id || "",
+    displaySpelling: word?.displaySpelling || "",
+    spokenSpelling: word?.spokenSpelling || "",
+    wordFileName: state.wordFileName,
+    analysisStage: state.lastAnalysisStage || "unknown",
+    errorName: error?.name || "",
+    errorMessage: error?.message || String(error),
+    errorStack: error?.stack || "",
+    recorder: {
+      mimeType: recorderInfo.type,
+      blobType: rawBlob.type,
+      blobSize: rawBlob.size,
+      chunkCount: recorderInfo.chunkCount,
+      chunkSizes: recorderInfo.chunkSizes,
+      elapsedMs: recorderInfo.elapsedMs,
+    },
+    settings: {
+      x1Threshold: state.x1Threshold,
+      x2SilenceSeconds: state.x2SilenceSeconds,
+      x3PrerollMs: state.x3PrerollMs,
+    },
+    browser: {
+      userAgent: navigator.userAgent,
+      mediaRecorderTypes: getSupportedMimeTypes(),
+    },
+    rawAudio: await blobToDataUrl(rawBlob),
+  };
+  state.diagnostics.push(diagnostic);
+  els.exportDiagnosticsButton.disabled = false;
+}
+
+function exportDiagnostics() {
+  if (!state.diagnostics.length) {
+    setStatus("解析エラー記録はありません");
+    return;
+  }
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    count: state.diagnostics.length,
+    diagnostics: state.diagnostics,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `analysis-failures-${state.wordFileName || "session"}-${Date.now()}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  setStatus("解析エラー記録を書き出しました");
+}
+
+function getSupportedMimeTypes() {
+  return ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mpeg"]
+    .filter((type) => window.MediaRecorder?.isTypeSupported(type));
 }
 
 function restoreAttempt(index) {

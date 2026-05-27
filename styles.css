@@ -232,6 +232,17 @@ button:disabled {
   font-size: 1.4rem;
 }
 
+.start-button.recording {
+  background: #d8e0e3;
+  color: #71808a;
+  box-shadow: none;
+}
+
+.start-button.next-ready {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(21, 127, 127, 0.18), 0 8px 18px rgba(21, 127, 127, 0.28);
+}
+
 .dark-button {
   background: #26343d;
 }
@@ -301,6 +312,12 @@ button:disabled {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 #recordingStatus {
