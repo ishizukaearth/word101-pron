@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sound Data Viewer</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #f4f7f8;
+        color: #172026;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(100%, 980px);
+        margin: 0 auto;
+        padding: 18px;
+      }
+      header, section {
+        background: #fff;
+        border: 1px solid #d7dde2;
+        border-radius: 8px;
+        margin-bottom: 14px;
+        padding: 18px;
+      }
+      .notice {
+        color: #66727c;
+        font-weight: 700;
+      }
+      h1, h2 { margin: 0; }
+      input, button {
+        font: inherit;
+      }
+      input[type="number"] {
+        min-height: 40px;
+        border: 1px solid #d7dde2;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-weight: 750;
+      }
+      button {
+        min-height: 44px;
+        border: 0;
+        border-radius: 8px;
+        background: #157f7f;
+        color: #fff;
+        font-weight: 750;
+      }
+      .review-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .review-row {
+        display: grid;
+        grid-template-columns: 80px 1fr 80px;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid #d7dde2;
+        border-radius: 8px;
+        padding: 10px;
+        background: #fff;
+      }
+      .review-row button {
+        background: #26343d;
+      }
+      .review-row.saved button {
+        background: #c5362f;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .scale-box {
+        display: grid;
+        gap: 6px;
+        margin-top: 12px;
+        max-width: 220px;
+      }
+      .secondary-button {
+        background: #26343d;
+      }
+      .word {
+        font-size: clamp(2.3rem, 12vw, 5rem);
+        line-height: 1;
+        font-weight: 800;
+      }
+      .meaning, .meta {
+        color: #66727c;
+        font-weight: 700;
+      }
+      .score-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .score-tile {
+        border: 1px solid #d7dde2;
+        border-radius: 8px;
+        padding: 10px;
+      }
+      .score-tile span {
+        display: block;
+        color: #66727c;
+        font-weight: 700;
+      }
+      .score-tile strong {
+        display: block;
+        font-size: 1.8rem;
+      }
+      .wave-stack {
+        display: grid;
+        gap: 14px;
+      }
+      img {
+        display: block;
+        width: 100%;
+        border: 1px solid #d7dde2;
+        border-radius: 8px;
+        background: #fbfcfd;
+      }
+      audio {
+        width: 100%;
+        margin: 8px 0;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 170px;
+        margin-top: 8px;
+        border: 1px solid #d7dde2;
+        border-radius: 8px;
+        background: #fbfcfd;
+        cursor: crosshair;
+      }
+      .mark-readout {
+        color: #66727c;
+        font-weight: 750;
+        margin: 8px 0 0;
+      }
+      .save-panel {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      [hidden] { display: none; }
+      @media (max-width: 680px) {
+        .score-grid { grid-template-columns: 1fr; }
+        .review-row { grid-template-columns: 64px 1fr 64px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>録音データレビュー</h1>
+        <p class="meta">データ書き出しで保存したJSONを選択してください。</p>
+        <p class="notice">単語を選び、モデル音とユーザ音の波形上で開始・終了をクリックして指定します。クリック1回目が開始、2回目が終了です。</p>
+        <input id="fileInput" type="file" accept=".json,application/json">
+        <label class="scale-box">
+          <span class="meta">波形縦倍率</span>
+          <input id="waveScaleInput" type="number" min="1" max="99" step="1" value="1">
+          <span class="meta" id="waveScaleReadout">上端RMS 1.000</span>
+        </label>
+      </header>
+
+      <section id="reviewView">
+        <h2>レビュー</h2>
+        <div class="toolbar">
+          <button id="exportMarksButton" type="button">データ書き出し</button>
+          <button id="downloadWavButton" class="secondary-button" type="button">WAV ZIP書き出し</button>
+        </div>
+        <div id="reviewList" class="review-list"></div>
+      </section>
+
+      <section id="detailView" hidden>
+        <button id="backButton" type="button">レビューへ戻る</button>
+        <div class="meta" id="wordNumber"></div>
+        <div class="word" id="wordText"></div>
+        <div class="meaning" id="meaningText"></div>
+        <div class="score-grid">
+          <div class="score-tile"><span>総合</span><strong id="overallScore">--</strong></div>
+          <div class="score-tile"><span>母音一致</span><strong id="vowelScore">--</strong></div>
+          <div class="score-tile"><span>重点音</span><strong id="focusScore">--</strong></div>
+        </div>
+      </section>
+
+      <section id="waveView" hidden>
+        <h2>波形比較</h2>
+        <div class="wave-stack">
+          <div>
+            <p class="meta">モデル録音 全体</p>
+            <audio id="modelRawAudio" controls></audio>
+            <canvas id="modelMarkCanvas" width="1200" height="220" aria-label="モデル録音の有音区間指定"></canvas>
+            <p class="mark-readout" id="modelMarkText">開始 -- / 終了 --</p>
+          </div>
+          <div>
+            <p class="meta">あなたの録音 全体</p>
+            <audio id="userRawAudio" controls></audio>
+            <canvas id="userMarkCanvas" width="1200" height="220" aria-label="ユーザ録音の有音区間指定"></canvas>
+            <p class="mark-readout" id="userMarkText">開始 -- / 終了 --</p>
+          </div>
+        </div>
+        <div class="save-panel">
+          <button id="saveMarksButton" type="button">セーブ</button>
+          <button id="clearMarksButton" class="secondary-button" type="button">マークをクリア</button>
+        </div>
+      </section>
+
+      <section id="spectrumView" hidden>
+        <h2>スペクトラム</h2>
+        <div class="wave-stack">
+          <img id="modelSpectrum" alt="モデルスペクトラム">
+          <img id="userSpectrum" alt="ユーザスペクトラム">
+        </div>
+      </section>
+    </main>
+    <script>
+      const state = {
+        records: [],
+        annotations: [],
+        currentIndex: -1,
+        decoded: new Map(),
+        audioContext: null,
+        waveScale: 1,
+        playbackFrame: null,
+      };
+      const fileInput = document.querySelector("#fileInput");
+      const waveScaleInput = document.querySelector("#waveScaleInput");
+      const reviewList = document.querySelector("#reviewList");
+      const reviewView = document.querySelector("#reviewView");
+      const detailView = document.querySelector("#detailView");
+      const waveView = document.querySelector("#waveView");
+      const spectrumView = document.querySelector("#spectrumView");
+      const modelCanvas = document.querySelector("#modelMarkCanvas");
+      const userCanvas = document.querySelector("#userMarkCanvas");
+      const modelRawAudio = document.querySelector("#modelRawAudio");
+      const userRawAudio = document.querySelector("#userRawAudio");
+
+      fileInput.addEventListener("change", async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const payload = JSON.parse(await file.text());
+        state.records = payload.records || [];
+        state.annotations = state.records.map((record) => ({
+          id: record.id,
+          displaySpelling: record.displaySpelling,
+          model: { startMs: null, endMs: null },
+          user: { startMs: null, endMs: null },
+          saved: false,
+        }));
+        state.decoded.clear();
+        renderReview();
+      });
+
+      waveScaleInput.addEventListener("change", async () => {
+        state.waveScale = clamp(Math.round(Number(waveScaleInput.value) || 1), 1, 99);
+        waveScaleInput.value = state.waveScale;
+        renderWaveScaleReadout();
+        await drawCurrentWaveforms();
+      });
+
+      document.querySelector("#backButton").addEventListener("click", () => {
+        detailView.hidden = true;
+        waveView.hidden = true;
+        spectrumView.hidden = true;
+        reviewView.hidden = false;
+      });
+
+      document.querySelector("#saveMarksButton").addEventListener("click", saveCurrentMarks);
+      document.querySelector("#clearMarksButton").addEventListener("click", clearCurrentMarks);
+      document.querySelector("#exportMarksButton").addEventListener("click", exportMarks);
+      document.querySelector("#downloadWavButton").addEventListener("click", () => downloadWavZip(state.records));
+      modelCanvas.addEventListener("click", (event) => markFromCanvas(event, "model"));
+      userCanvas.addEventListener("click", (event) => markFromCanvas(event, "user"));
+      setupPlaybackMarker(modelRawAudio);
+      setupPlaybackMarker(userRawAudio);
+
+      function renderReview() {
+        reviewList.innerHTML = state.records.map((record, index) => `
+          <div class="review-row ${state.annotations[index]?.saved ? "saved" : ""}">
+            <button type="button" data-index="${index}">${escapeHtml(record.id)}</button>
+            <span>${escapeHtml(record.displaySpelling)}</span>
+            <strong>${state.annotations[index]?.saved ? "済" : (record.scores?.overall ?? "--")}</strong>
+          </div>
+        `).join("");
+        reviewList.querySelectorAll("button").forEach((button) => {
+          button.addEventListener("click", () => showDetail(Number(button.dataset.index)));
+        });
+      }
+
+      async function showDetail(index) {
+        const record = state.records[index];
+        state.currentIndex = index;
+        reviewView.hidden = true;
+        detailView.hidden = false;
+        waveView.hidden = false;
+        spectrumView.hidden = false;
+        document.querySelector("#wordNumber").textContent = record.id;
+        document.querySelector("#wordText").textContent = record.displaySpelling;
+        document.querySelector("#meaningText").textContent = record.displayMeaning || "";
+        document.querySelector("#overallScore").textContent = record.scores?.overall ?? "--";
+        document.querySelector("#vowelScore").textContent = record.scores?.vowelScore ?? "--";
+        document.querySelector("#focusScore").textContent = record.scores?.focusScore ?? "--";
+        setMedia("#modelRawAudio", record.model.rawAudio);
+        setMedia("#userRawAudio", record.user.rawAudio);
+        document.querySelector("#modelSpectrum").src = record.model.spectrumPng;
+        document.querySelector("#userSpectrum").src = record.user.spectrumPng;
+        await drawCurrentWaveforms();
+      }
+
+      function setMedia(selector, src) {
+        const element = document.querySelector(selector);
+        element.src = src || "";
+      }
+
+      async function drawCurrentWaveforms() {
+        const index = state.currentIndex;
+        if (index < 0) return;
+        const record = state.records[index];
+        const [model, user] = await Promise.all([
+          decodeRecordAudio(index, "model", record.model.rawAudio),
+          decodeRecordAudio(index, "user", record.user.rawAudio),
+        ]);
+        renderWaveScaleReadout();
+        drawWaveform(modelCanvas, model.samples, model.sampleRate, getCurrentMark("model"), "#157f7f", modelRawAudio.currentTime * 1000);
+        drawWaveform(userCanvas, user.samples, user.sampleRate, getCurrentMark("user"), "#bd5a2a", userRawAudio.currentTime * 1000);
+        renderMarkText();
+      }
+
+      function redrawCurrentWaveformsFromCache() {
+        const index = state.currentIndex;
+        if (index < 0) return;
+        const model = state.decoded.get(`${index}:model`);
+        const user = state.decoded.get(`${index}:user`);
+        if (model) drawWaveform(modelCanvas, model.samples, model.sampleRate, getCurrentMark("model"), "#157f7f", modelRawAudio.currentTime * 1000);
+        if (user) drawWaveform(userCanvas, user.samples, user.sampleRate, getCurrentMark("user"), "#bd5a2a", userRawAudio.currentTime * 1000);
+        renderMarkText();
+      }
+
+      async function decodeRecordAudio(index, target, dataUrl) {
+        const key = `${index}:${target}`;
+        if (state.decoded.has(key)) return state.decoded.get(key);
+        const bytes = dataUrlToBytes(dataUrl);
+        const audioContext = getAudioContext();
+        const buffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
+        const decoded = {
+          buffer,
+          samples: buffer.getChannelData(0),
+          sampleRate: buffer.sampleRate,
+          durationMs: Math.round(buffer.duration * 1000),
+        };
+        state.decoded.set(key, decoded);
+        return decoded;
+      }
+
+      function getAudioContext() {
+        if (!state.audioContext) {
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          state.audioContext = new AudioContextClass();
+        }
+        return state.audioContext;
+      }
+
+      function drawWaveform(canvas, samples, sampleRate, mark, color, playbackMs = 0) {
+        const context = canvas.getContext("2d");
+        const { width, height } = canvas;
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#fbfcfd";
+        context.fillRect(0, 0, width, height);
+        context.strokeStyle = "#e6ebef";
+        context.lineWidth = 1;
+        for (let i = 1; i < 4; i += 1) {
+          const y = (height / 4) * i;
+          context.beginPath();
+          context.moveTo(0, y);
+          context.lineTo(width, y);
+          context.stroke();
+        }
+
+        const center = height / 2;
+        const step = Math.max(1, Math.floor(samples.length / width));
+        context.beginPath();
+        for (let x = 0; x < width; x += 1) {
+          const start = x * step;
+          const end = Math.min(samples.length, start + step);
+          let min = 0;
+          let max = 0;
+          for (let i = start; i < end; i += 1) {
+            const sample = samples[i];
+            if (sample < min) min = sample;
+            if (sample > max) max = sample;
+          }
+          const scaledMax = clamp(max * state.waveScale, -1, 1);
+          const scaledMin = clamp(min * state.waveScale, -1, 1);
+          context.moveTo(x, center - scaledMax * center * 0.9);
+          context.lineTo(x, center - scaledMin * center * 0.9);
+        }
+        context.strokeStyle = color;
+        context.lineWidth = 1;
+        context.stroke();
+
+        const durationMs = (samples.length / sampleRate) * 1000;
+        drawScaleLabel(context, height);
+        drawMarkLine(context, width, height, durationMs, mark.startMs, "#1b67d1", "S");
+        drawMarkLine(context, width, height, durationMs, mark.endMs, "#c5362f", "E");
+        drawPlaybackLine(context, width, height, durationMs, playbackMs);
+      }
+
+      function drawScaleLabel(context, height) {
+        const topValue = 1 / state.waveScale;
+        context.fillStyle = "#66727c";
+        context.font = "15px system-ui, sans-serif";
+        context.fillText(`上端RMS ${topValue.toFixed(3)}`, 10, 20);
+        context.fillText(`-${topValue.toFixed(3)}`, 10, height - 10);
+      }
+
+      function renderWaveScaleReadout() {
+        document.querySelector("#waveScaleReadout").textContent = `上端RMS ${(1 / state.waveScale).toFixed(3)}`;
+      }
+
+      function drawMarkLine(context, width, height, durationMs, timeMs, color, label) {
+        if (!Number.isFinite(timeMs)) return;
+        const x = Math.max(0, Math.min(width, (timeMs / durationMs) * width));
+        context.strokeStyle = color;
+        context.lineWidth = 3;
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, height);
+        context.stroke();
+        context.fillStyle = color;
+        context.font = "16px system-ui, sans-serif";
+        context.fillText(`${label} ${Math.round(timeMs)}ms`, Math.min(x + 6, width - 88), 20);
+      }
+
+      function drawPlaybackLine(context, width, height, durationMs, timeMs) {
+        if (!Number.isFinite(timeMs) || timeMs <= 0 || timeMs > durationMs) return;
+        const x = Math.max(0, Math.min(width, (timeMs / durationMs) * width));
+        context.strokeStyle = "#111820";
+        context.lineWidth = 2;
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, height);
+        context.stroke();
+        context.fillStyle = "#111820";
+        context.font = "15px system-ui, sans-serif";
+        context.fillText(`${Math.round(timeMs)}ms`, Math.min(x + 6, width - 70), height - 10);
+      }
+
+      function setupPlaybackMarker(audio) {
+        audio.addEventListener("play", startPlaybackMarkerLoop);
+        audio.addEventListener("pause", redrawCurrentWaveformsFromCache);
+        audio.addEventListener("seeked", redrawCurrentWaveformsFromCache);
+        audio.addEventListener("ended", redrawCurrentWaveformsFromCache);
+        audio.addEventListener("timeupdate", redrawCurrentWaveformsFromCache);
+      }
+
+      function startPlaybackMarkerLoop() {
+        if (state.playbackFrame) return;
+        const tick = () => {
+          redrawCurrentWaveformsFromCache();
+          if (!modelRawAudio.paused || !userRawAudio.paused) {
+            state.playbackFrame = requestAnimationFrame(tick);
+          } else {
+            state.playbackFrame = null;
+          }
+        };
+        state.playbackFrame = requestAnimationFrame(tick);
+      }
+
+      async function markFromCanvas(event, target) {
+        const index = state.currentIndex;
+        if (index < 0) return;
+        const canvas = target === "model" ? modelCanvas : userCanvas;
+        const decoded = await decodeRecordAudio(index, target, state.records[index][target].rawAudio);
+        const rect = canvas.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        const timeMs = Math.round(decoded.durationMs * ratio);
+        const mark = getCurrentMark(target);
+        if (Number.isFinite(mark.startMs) && Number.isFinite(mark.endMs)) {
+          alert("開始・終了は指定済みです。やり直す場合は「マークをクリア」を押してから指定してください。");
+          return;
+        }
+        if (!Number.isFinite(mark.startMs)) {
+          mark.startMs = timeMs;
+          mark.endMs = null;
+        } else if (timeMs < mark.startMs) {
+          mark.endMs = mark.startMs;
+          mark.startMs = timeMs;
+        } else {
+          mark.endMs = timeMs;
+        }
+        state.annotations[index].saved = false;
+        await drawCurrentWaveforms();
+      }
+
+      function getCurrentMark(target) {
+        return state.annotations[state.currentIndex][target];
+      }
+
+      function renderMarkText() {
+        document.querySelector("#modelMarkText").textContent = formatMark("モデル", getCurrentMark("model"));
+        document.querySelector("#userMarkText").textContent = formatMark("あなた", getCurrentMark("user"));
+      }
+
+      function formatMark(label, mark) {
+        return `${label}: 開始 ${formatMs(mark.startMs)} / 終了 ${formatMs(mark.endMs)}`;
+      }
+
+      function formatMs(value) {
+        return Number.isFinite(value) ? `${Math.round(value)} ms` : "--";
+      }
+
+      function saveCurrentMarks() {
+        const index = state.currentIndex;
+        if (index < 0) return;
+        const annotation = state.annotations[index];
+        const complete = ["model", "user"].every((target) =>
+          Number.isFinite(annotation[target].startMs) && Number.isFinite(annotation[target].endMs)
+        );
+        if (!complete) {
+          alert("モデル音とユーザ音の開始・終了をすべて指定してください。");
+          return;
+        }
+        annotation.saved = true;
+        detailView.hidden = true;
+        waveView.hidden = true;
+        spectrumView.hidden = true;
+        reviewView.hidden = false;
+        renderReview();
+      }
+
+      async function clearCurrentMarks() {
+        const index = state.currentIndex;
+        if (index < 0) return;
+        state.annotations[index].model = { startMs: null, endMs: null };
+        state.annotations[index].user = { startMs: null, endMs: null };
+        state.annotations[index].saved = false;
+        await drawCurrentWaveforms();
+      }
+
+      function exportMarks() {
+        const rows = state.annotations
+          .filter((item) => item.saved)
+          .map((item) => ({
+            id: item.id,
+            spelling: item.displaySpelling,
+            modelStartMs: Math.round(item.model.startMs),
+            modelEndMs: Math.round(item.model.endMs),
+            userStartMs: Math.round(item.user.startMs),
+            userEndMs: Math.round(item.user.endMs),
+          }));
+        const csv = [
+          "id,spelling,modelStartMs,modelEndMs,userStartMs,userEndMs",
+          ...rows.map((row) => [
+            csvCell(row.id),
+            csvCell(row.spelling),
+            row.modelStartMs,
+            row.modelEndMs,
+            row.userStartMs,
+            row.userEndMs,
+          ].join(",")),
+        ].join("\n");
+        const payload = {
+          exportedAt: new Date().toISOString(),
+          count: rows.length,
+          annotations: rows,
+        };
+        downloadText(`voice-segments-${Date.now()}.csv`, csv, "text/csv;charset=utf-8");
+        downloadText(`voice-segments-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json");
+      }
+
+      function csvCell(value) {
+        return `"${String(value ?? "").replace(/"/g, '""')}"`;
+      }
+
+      function downloadText(filename, text, type) {
+        const url = URL.createObjectURL(new Blob([text], { type }));
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      async function downloadWavZip(records) {
+        const files = [];
+        for (const record of records) {
+          if (record.model.rawAudio) {
+            files.push({
+              name: `wavData/${safeName(record.id)}_${safeName(record.displaySpelling)}_demo_all.wav`,
+              bytes: dataUrlToBytes(record.model.rawAudio),
+            });
+          }
+          files.push({
+            name: `wavData/${safeName(record.id)}_${safeName(record.displaySpelling)}_demo_voice.wav`,
+            bytes: dataUrlToBytes(record.model.trimmedAudio),
+          });
+          if (record.user.rawAudio) {
+            files.push({
+              name: `wavData/${safeName(record.id)}_${safeName(record.displaySpelling)}_user_all.wav`,
+              bytes: dataUrlToBytes(record.user.rawAudio),
+            });
+          }
+          files.push({
+            name: `wavData/${safeName(record.id)}_${safeName(record.displaySpelling)}_user_voice.wav`,
+            bytes: dataUrlToBytes(record.user.trimmedAudio),
+          });
+        }
+        const zip = createZip(files);
+        const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `wavData-${Date.now()}.zip`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function safeName(value) {
+        return String(value ?? "")
+          .replace(/[\\/:*?"<>|]/g, "_")
+          .replace(/\s+/g, "_")
+          .slice(0, 80);
+      }
+
+      function dataUrlToBytes(dataUrl) {
+        const base64 = String(dataUrl || "").split(",")[1] || "";
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+      }
+
+      function createZip(files) {
+        const chunks = [];
+        const central = [];
+        let offset = 0;
+        for (const file of files) {
+          const nameBytes = new TextEncoder().encode(file.name);
+          const crc = crc32(file.bytes);
+          const local = new Uint8Array(30 + nameBytes.length);
+          const view = new DataView(local.buffer);
+          view.setUint32(0, 0x04034b50, true);
+          view.setUint16(4, 20, true);
+          view.setUint16(6, 0, true);
+          view.setUint16(8, 0, true);
+          view.setUint32(10, 0, true);
+          view.setUint32(14, crc, true);
+          view.setUint32(18, file.bytes.length, true);
+          view.setUint32(22, file.bytes.length, true);
+          view.setUint16(26, nameBytes.length, true);
+          local.set(nameBytes, 30);
+          chunks.push(local, file.bytes);
+
+          const center = new Uint8Array(46 + nameBytes.length);
+          const centerView = new DataView(center.buffer);
+          centerView.setUint32(0, 0x02014b50, true);
+          centerView.setUint16(4, 20, true);
+          centerView.setUint16(6, 20, true);
+          centerView.setUint16(8, 0, true);
+          centerView.setUint16(10, 0, true);
+          centerView.setUint32(12, 0, true);
+          centerView.setUint32(16, crc, true);
+          centerView.setUint32(20, file.bytes.length, true);
+          centerView.setUint32(24, file.bytes.length, true);
+          centerView.setUint16(28, nameBytes.length, true);
+          centerView.setUint32(42, offset, true);
+          center.set(nameBytes, 46);
+          central.push(center);
+          offset += local.length + file.bytes.length;
+        }
+        const centralOffset = offset;
+        for (const item of central) {
+          chunks.push(item);
+          offset += item.length;
+        }
+        const end = new Uint8Array(22);
+        const endView = new DataView(end.buffer);
+        endView.setUint32(0, 0x06054b50, true);
+        endView.setUint16(8, files.length, true);
+        endView.setUint16(10, files.length, true);
+        endView.setUint32(12, offset - centralOffset, true);
+        endView.setUint32(16, centralOffset, true);
+        chunks.push(end);
+        return concatBytes(chunks);
+      }
+
+      function concatBytes(chunks) {
+        const size = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        const out = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          out.set(chunk, offset);
+          offset += chunk.length;
+        }
+        return out;
+      }
+
+      function crc32(bytes) {
+        let crc = -1;
+        for (const byte of bytes) {
+          crc ^= byte;
+          for (let i = 0; i < 8; i += 1) {
+            crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+          }
+        }
+        return (crc ^ -1) >>> 0;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          "\"": "&quot;",
+          "'": "&#39;",
+        }[char]));
+      }
+    </script>
+  </body>
+</html>
