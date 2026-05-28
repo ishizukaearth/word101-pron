@@ -268,6 +268,16 @@ button:disabled {
   background: #9f2f2f;
 }
 
+.error-banner {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #d5534f;
+  border-radius: 8px;
+  background: #fff0ef;
+  color: #9f2f2f;
+  font-weight: 800;
+}
+
 @keyframes recordingPulse {
   from {
     opacity: 0.42;
@@ -503,6 +513,8 @@ select {
           <button class="main-button" id="playMineButton" type="button" disabled>自分を再生</button>
           <button class="main-button dark-button" id="reviewButton" type="button">レビュー</button>
         </div>
+
+        <div class="error-banner" id="practiceError" hidden></div>
 
         <div class="focus-row" aria-label="重点音">
           <span class="focus-chip" id="aeChip">/ae/</span>
@@ -758,6 +770,7 @@ const els = {
   speakButton: document.querySelector("#speakButton"),
   recordButton: document.querySelector("#recordButton"),
   playMineButton: document.querySelector("#playMineButton"),
+  practiceError: document.querySelector("#practiceError"),
   modelCanvas: document.querySelector("#modelCanvas"),
   userCanvas: document.querySelector("#userCanvas"),
   modelSpectrumCanvas: document.querySelector("#modelSpectrumCanvas"),
@@ -955,6 +968,7 @@ function setChip(element, active) {
 function nextPractice() {
   if (state.isRecording) return;
   if (state.index >= state.words.length - 1) return;
+  clearPracticeError();
   state.index += 1;
   clearCurrentAudio({ revokeSaved: false });
   render();
@@ -1071,6 +1085,7 @@ async function startRecording({ autoStop, source }) {
   }
 
   try {
+    clearPracticeError();
     clearUserAudio();
     const audioContext = getAudioContext();
     if (audioContext.state === "suspended") await audioContext.resume();
@@ -1106,7 +1121,8 @@ async function startRecording({ autoStop, source }) {
           elapsedMs: Math.round(performance.now() - state.recordingStartedAt),
         });
         clearUserAudio();
-        setStatus("録音データを解析できませんでした。もう一度録音してください");
+        showPracticeError(`解析エラー: ${wordLabelForStatus()} の録音を処理できませんでした。もう一度録音してください。`);
+        setStatus("解析エラー。もう一度録音してください");
       } finally {
         state.isRecording = false;
         releaseMicrophoneStream();
@@ -2057,6 +2073,22 @@ function setStatus(text) {
   els.recordingStatus.textContent = text;
 }
 
+function showPracticeError(text) {
+  els.practiceError.textContent = text;
+  els.practiceError.hidden = false;
+}
+
+function clearPracticeError() {
+  els.practiceError.textContent = "";
+  els.practiceError.hidden = true;
+}
+
+function wordLabelForStatus() {
+  const word = currentWord();
+  if (!word) return "現在の単語";
+  return `#${word.id} ${word.displaySpelling}`;
+}
+
 async function loadSelectedFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -2205,6 +2237,7 @@ function readStoredNumber(key, fallback) {
 </script>
   </body>
 </html>
+
 
 
 
