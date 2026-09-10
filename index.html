@@ -1,9 +1,10 @@
+<!--学習用アプリ暫定版v16 model音の切り出し条件をuserと揃える 2026,9,10 -->
 <!doctype html>
 <html lang="ja">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>English Pronunciation Trainer</title>
+    <title>Av15 Commented</title>
     <style>
 :root {
   color-scheme: light;
@@ -18,7 +19,6 @@
   --good: #23845f;
   --shadow: 0 18px 45px rgba(23, 32, 38, 0.12);
 }
-
 * {
   box-sizing: border-box;
 }
@@ -661,6 +661,27 @@ select {
     </main>
 
     <script>
+
+/*
+  Av15_comment.html
+  ------------------------------------------------------------
+  発音学習アプリ Av15 の理解用コメント版です。
+  元データは、Au1v1へ改修する前の Av15 相当コミット 0603cf9 の index.html です。
+
+  Av15の録音停止仕様:
+  - X1 = RMS閾値
+  - X2 = RMS<X1 が継続したら無音とみなす時間
+  - 一度発話を検出した後、RMS<X1 が X2秒続いた時点で録音停止
+  - Au1v1の「無音条件成立後さらにX2秒録る」変更は含みません
+
+  主な処理:
+  1. 単語ファイルを読み込む
+  2. モデル音声をTTSで再生し、その音をマイク録音する
+  3. ユーザ音声をMediaRecorderで録音する
+  4. VADで録音停止タイミングを決める
+  5. trimUserSpeechBuffer()で発話区間を切り出す
+  6. 波形・スペクトラム・簡易評点を表示する
+*/
 const WORD_FILES = [
   "JH101_001.txt",
   "JH101_101.txt",
@@ -678,11 +699,16 @@ const WORD_FILES = [
   "JH101_1301.txt",
 ];
 
+// 最後に使用した単語ファイル名をブラウザのlocalStorageに保存するためのキー。
 const STORAGE_KEY = "jh101-last-word-file";
+// X1: 無音/有音判定に使うRMS閾値。小さいほど弱い子音や語尾を拾いやすい。
 const X1_STORAGE_KEY = "jh101-rms-threshold-x1-v2";
+// X2: RMS<X1の状態が何秒続いたら録音停止条件成立とみなすか。
 const X2_STORAGE_KEY = "jh101-silence-seconds-x2";
+// X3: 発話開始点を、X1を超えた時点から何ms前に戻すか。語頭子音保護用。
 const X3_STORAGE_KEY = "jh101-preroll-ms-x3";
 
+// アプリ全体の状態。単語、録音Blob、切り出し後音声、解析結果、評点、X1/X2/X3などを保持します。
 const state = {
   words: [],
   wordFileName: "",
@@ -719,6 +745,7 @@ const state = {
   lastMetrics: null,
 };
 
+// 画面上のHTML要素への参照。起動時にまとめて取得しておきます。
 const els = {
   practiceView: document.querySelector("#practiceView"),
   reviewView: document.querySelector("#reviewView"),
@@ -816,6 +843,11 @@ function setupWordFileOptions() {
     .join("");
 }
 
+/*
+  単語ファイルを解析します。
+  形式: 番号#表示スペル#発音スペル#表示意味#発音意味#発音記号#
+  発音スペル・発音意味が空なら表示用の値で補います。
+*/
 function parseWordText(text) {
   const normalizedText = text.replace(/^\uFEFF/, "");
   const lineItems = normalizedText
@@ -976,6 +1008,11 @@ function playModelAudio() {
   speakCurrentWord({ recordAfter: false });
 }
 
+/*
+  モデル音声をTTSで再生します。
+  recordAfter=true の場合は、TTS音声をマイクで録音してモデル音データを作り、
+  その後ユーザ録音へ進みます。
+*/
 async function speakCurrentWord({ recordAfter }) {
   const current = currentWord();
   if (!current || !("speechSynthesis" in window)) {
@@ -1011,6 +1048,7 @@ async function speakCurrentWord({ recordAfter }) {
   window.setTimeout(() => window.speechSynthesis.speak(utterance), recordAfter ? 200 : 0);
 }
 
+// モデル音声を録音するために、マイク入力をMediaRecorderへ接続します。
 async function startModelCapture() {
   const stream = await ensureMicrophoneStream();
   const mimeType = pickMimeType();
@@ -1035,6 +1073,13 @@ function stopModelCapture(capture) {
   });
 }
 
+/*
+  ユーザ音声の録音開始処理です。
+  - getUserMediaでマイクを取得
+  - MediaRecorderで録音チャンクを蓄積
+  - autoStop=trueならstartVad()でRMSを監視
+  - stopイベントで録音全体Blobを作り、analyzeRecording()へ渡します
+*/
 async function startRecording({ autoStop, source }) {
   if (state.mediaRecorder?.state === "recording") {
     stopRecording();
@@ -1124,6 +1169,17 @@ function stopRecording() {
   if (state.mediaRecorder?.state === "recording") state.mediaRecorder.stop();
 }
 
+/*
+  VAD: Voice Activity Detection。
+  録音中のマイク波形から短時間RMSを計算し、X1/X2で録音停止を判断します。
+
+  Av15の停止条件:
+  1. RMS>=X1 を一度検出したら「発話開始済み」とする
+  2. その後 RMS<X1 が X2秒続いたら silenceLongEnough=true
+  3. 発話が最小時間を超えていて、かつ silenceLongEnoughなら stopRecording()
+
+  ここで止まった録音全体には、末尾におおむねX2秒ぶんの無音が含まれます。
+*/
 function startVad(stream) {
   stopVad();
   const audioContext = getAudioContext();
@@ -1144,10 +1200,10 @@ function startVad(stream) {
   const tick = () => {
     if (state.mediaRecorder?.state !== "recording") return;
     analyser.getFloatTimeDomainData(data);
-    const rms = getRms(data);
+    const rms = getRms(data); // RMS = sqrt(mean(sample^2))。短時間の音量指標。
     const now = performance.now();
     const elapsed = now - state.recordingStartedAt;
-    const isSpeech = rms >= threshold;
+    const isSpeech = rms >= threshold; // X1以上なら有音、X1未満なら無音候補。
 
     if (isSpeech) {
       if (!hasSpeech) {
@@ -1161,6 +1217,7 @@ function startVad(stream) {
     }
 
     const speechLongEnough = hasSpeech && now - speechStartedAt >= minSpeechMs;
+    // X2秒以上、RMS<X1が継続したら録音停止条件成立。
     const silenceLongEnough = silentSince && now - silentSince >= silenceAfterSpeechMs;
 
     if ((speechLongEnough && silenceLongEnough) || elapsed >= maxRecordingMs) {
@@ -1193,12 +1250,17 @@ function playRecording() {
   audio.play();
 }
 
+/*
+  録音BlobをAudioBufferへデコードし、発話区間切り出し、波形/RMS、スペクトラム、
+  フォルマント、評点計算へ渡す中心処理です。
+  rawBlobは録音全体、audioBufferは切り出し後の発話区間です。
+*/
 async function analyzeRecording(rawBlob, target) {
   const analysisStartedAt = performance.now();
   const buffer = await rawBlob.arrayBuffer();
   const audioContext = getAudioContext();
   const rawAudioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
-  const trimmed = target === "user" ? trimUserSpeechBuffer(rawAudioBuffer) : trimModelSpeechBuffer(rawAudioBuffer);
+  const trimmed = trimSpeechBuffer(rawAudioBuffer) ;
   const audioBuffer = trimmed.audioBuffer;
   const rawWavBlob = encodeWav(rawAudioBuffer);
   const samples = audioBuffer.getChannelData(0);
@@ -1252,6 +1314,7 @@ function formatTrimText(trimmed) {
   return `全体 ${trimmed.rawDurationMs} ms / 発話区間 ${trimmed.startMs}-${trimmed.endMs}`;
 }
 
+// モデル音とユーザ音の解析結果を比較し、総合・母音一致・重点音の表示を更新します。
 function renderScores(elapsedMs) {
   const vowelScore = getFormantMatchScore();
   const focusScore = getBandSimilarityScore();
@@ -1302,6 +1365,7 @@ function getFormantText(analysis) {
   return `${formants.f1}/${formants.f2}`;
 }
 
+// 1単語分の録音URL、解析結果、評点、切り出し時刻をレビュー用に保存します。
 function saveAttempt() {
   if (state.index < 0 || !state.recordedUrl) return;
   const vowelScore = getFormantMatchScore();
@@ -1373,6 +1437,7 @@ function jumpToReviewedWord(index) {
   setStatus("録音済みデータを読み込みました");
 }
 
+// レビュー済みデータをJSONとして書き出します。Au2 viewerで読む元データです。
 async function exportSoundData() {
   const records = [];
   for (const [index, attempt] of [...state.attempts.entries()].sort((a, b) => a[0] - b[0])) {
@@ -1506,67 +1571,81 @@ function createRmsEnvelopeByWindow(samples, sampleRate, windowMs) {
   return envelope;
 }
 
-function trimUserSpeechBuffer(audioBuffer) {
+/*
+  ユーザ録音全体から発話区間を切り出します。
+
+  開始点:
+  - 20ms窓ごとにRMSを計算
+  - 最初にRMS>=X1になった位置を発話開始候補にする
+  - X3 msだけ前へ戻し、語頭子音の欠落を減らす
+
+  終了点:
+  - Av15ではVADがRMS<X1がX2秒継続した時点で録音を止める
+  - そのため録音末尾には概ねX2秒分の無音が含まれる
+  - ここでは末尾からX2秒を切り落として発話区間とする
+*/
+
+/*
+共通の無音部切り捨て関数
+*/
+function trimSpeechBuffer(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
   const source = audioBuffer.getChannelData(0);
+
+  // 20ms単位でRMSを調べる
   const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
   const threshold = state.x1Threshold;
-  let speechStart = 0;
 
+  let speechStart = 0;
+  let speechEnd = source.length;
+  let foundSpeech = false;
+
+  // ---- 発話開始位置を探す ----
   for (let index = 0; index < source.length; index += windowSize) {
     const end = Math.min(source.length, index + windowSize);
-    if (getRms(source.subarray(index, end)) >= threshold) {
-      speechStart = Math.max(0, index - Math.round((state.x3PrerollMs / 1000) * sampleRate));
+    const rms = getRms(source.subarray(index, end));
+
+    if (rms >= threshold) {
+      speechStart = Math.max(
+        0,
+        index - Math.round((state.x3PrerollMs / 1000) * sampleRate)
+      );
+      foundSpeech = true;
       break;
     }
   }
 
-  const speechEnd = Math.max(speechStart + 1, source.length - Math.round(state.x2SilenceSeconds * sampleRate));
-  const trimmed = getAudioContext().createBuffer(1, Math.max(1, speechEnd - speechStart), sampleRate);
-  trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
-  return {
-    audioBuffer: trimmed,
-    startMs: Math.round((speechStart / sampleRate) * 1000),
-    endMs: Math.round((speechEnd / sampleRate) * 1000),
-    rawDurationMs: Math.round(audioBuffer.duration * 1000),
-  };
-}
+  // ---- 発話終了位置を後ろから探す ----
+  if (foundSpeech) {
+    for (
+      let index = source.length - windowSize;
+      index >= speechStart;
+      index -= windowSize
+    ) {
+      const start = Math.max(0, index);
+      const end = Math.min(source.length, index + windowSize);
+      const rms = getRms(source.subarray(start, end));
 
-function trimModelSpeechBuffer(audioBuffer) {
-  const sampleRate = audioBuffer.sampleRate;
-  const source = audioBuffer.getChannelData(0);
-  const windowSize = Math.max(1, Math.round(sampleRate * 0.02));
-  const noiseWindowSamples = Math.min(source.length, Math.round(sampleRate * 0.18));
-  const noiseRms = getRms(source.subarray(0, noiseWindowSamples));
-  const delayCutSamples = Math.min(source.length, Math.round(sampleRate * 0.2));
-  const earlyProbeStart = Math.min(source.length, Math.round(sampleRate * 0.03));
-  const earlyProbeEnd = Math.min(source.length, Math.round(sampleRate * 0.18));
-  const earlyRms = getRms(source.subarray(earlyProbeStart, earlyProbeEnd));
-  const hasEarlySpeech = earlyRms >= 0.01;
-  const threshold = hasEarlySpeech ? Math.max(0.006, earlyRms * 0.35) : Math.max(0.018, noiseRms * 4);
-  const leadingCutSamples = hasEarlySpeech ? 0 : delayCutSamples;
-  let speechStart = leadingCutSamples;
-  let speechEnd = source.length;
-
-  for (let index = leadingCutSamples; index < source.length; index += windowSize) {
-    const end = Math.min(source.length, index + windowSize);
-    if (getRms(source.subarray(index, end)) >= threshold) {
-      speechStart = Math.max(leadingCutSamples, index - Math.round(0.03 * sampleRate));
-      break;
-    }
-  }
-
-  for (let index = source.length - windowSize; index >= speechStart; index -= windowSize) {
-    const end = Math.min(source.length, index + windowSize);
-    if (getRms(source.subarray(index, end)) >= threshold) {
-      speechEnd = Math.min(source.length, end + Math.round(0.02 * sampleRate));
-      break;
+      if (rms >= threshold) {
+        speechEnd = end;
+        break;
+      }
     }
   }
 
   speechEnd = Math.max(speechStart + 1, speechEnd);
-  const trimmed = getAudioContext().createBuffer(1, Math.max(1, speechEnd - speechStart), sampleRate);
-  trimmed.copyToChannel(source.slice(speechStart, speechEnd), 0);
+
+  const trimmed = getAudioContext().createBuffer(
+    1,
+    Math.max(1, speechEnd - speechStart),
+    sampleRate
+  );
+
+  trimmed.copyToChannel(
+    source.slice(speechStart, speechEnd),
+    0
+  );
+
   return {
     audioBuffer: trimmed,
     startMs: Math.round((speechStart / sampleRate) * 1000),
@@ -1574,6 +1653,7 @@ function trimModelSpeechBuffer(audioBuffer) {
     rawDurationMs: Math.round(audioBuffer.duration * 1000),
   };
 }
+
 
 function normalize(values) {
   const max = Math.max(...values, 0.001);
@@ -1633,6 +1713,7 @@ function drawGrid(context, width, height) {
   }
 }
 
+// 短時間FFTでスペクトログラムと簡易音響特徴量を計算します。
 function analyzeSpectrum(samples, sampleRate) {
   const fftSize = 1024;
   const hopSize = 256;
@@ -1718,6 +1799,7 @@ function bandEnergy(frames, sampleRate, fftSize, lowHz, highHz) {
   return total ? band / total : 0;
 }
 
+// F1/F2の簡易推定。母音一致度の目安として使います。
 function estimateFormants(frames, sampleRate, fftSize) {
   const average = new Float32Array(frames[0].length);
   for (const frame of frames) {
@@ -2090,6 +2172,7 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+// RMS = sqrt(mean(sample^2))。有音/無音判定の基本となる短時間音量です。
 function getRms(samples) {
   if (!samples.length) return 0;
   let sumSquares = 0;
@@ -2098,6 +2181,7 @@ function getRms(samples) {
 }
 
 
+// AudioBufferをWAV Blobに変換します。再生・書き出し用です。
 function encodeWav(audioBuffer) {
   const samples = audioBuffer.getChannelData(0);
   const sampleRate = audioBuffer.sampleRate;
@@ -2136,6 +2220,7 @@ function readStoredNumber(key, fallback) {
   const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
 }
+
 
 </script>
   </body>
